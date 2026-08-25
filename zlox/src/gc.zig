@@ -7,7 +7,7 @@ const Value = @import("value.zig").Value;
 const VM = @import("vm.zig").VM;
 
 pub const GC = struct {
-    pub const Obj = @import("obj.zig").Obj(.{ .mark = false });
+    pub const Obj = @import("obj.zig").Obj(.{ .gc = true, .mark = false });
 
     const Self = @This();
 
@@ -55,8 +55,12 @@ pub const GC = struct {
     }
 
     fn collect(self: *Self) void {
-        self.mark_roots();
-        self.trace_references();
+        if (self.callbacks.len() > 0) {
+            self.mark_roots();
+            self.trace_references();
+            self.table_remove_white();
+            self.sweep();
+        }
     }
 
     fn trace_references(self: *Self) void {
@@ -110,13 +114,42 @@ pub const GC = struct {
 
     fn mark_roots(self: *Self) void {
         var iter = self.callbacks.iter();
-        while (iter.next()) |cb| {
+        while (iter.next()) |cb|
             cb.call();
+    }
+
+    fn table_remove_white(self: *Self) void {
+        const tbl = &self.table;
+        tbl.for_each(tbl, struct {
+            pub fn fun(table: *Obj.String.Table, key: Obj.String.Table.Key, _: Obj.String.Table.Value) void {
+                const obj = key.cast();
+                if (obj.fields.gc and !obj.fields.mark)
+                    _ = table.delete(key);
+            }
+        }.fun);
+    }
+
+    fn sweep(self: *Self) void {
+        var iter = self.objs.iter();
+        while (iter.next()) |obj| {
+            if (obj.fields.gc) {
+                if (!obj.fields.mark) {
+                    iter.pop();
+                    dbg_obj("O", "free", obj, false);
+                    obj.free(self.allocator);
+                } else {
+                    obj.fields.mark = false;
+                }
+            }
         }
     }
 
     pub fn push_callback(self: *Self, callback: Callback.Fn, arg: Callback.Arg) !void {
         try self.callbacks.push(0, Callback{ .@"fn" = callback, .arg = arg });
+    }
+
+    pub fn swap_callback(self: *Self, callback: Callback.Fn, arg: Callback.Arg) !void {
+        try self.callbacks.set(0, Callback{ .@"fn" = callback, .arg = arg });
     }
 
     pub fn pop_callback(self: *Self) void {
@@ -143,18 +176,23 @@ pub const GC = struct {
     }
 
     pub fn emplace(self: *Self, comptime tp: Obj.Type, arg: tp.get().Arg) (ObjList.Error || tp.get().Error)!*tp.get() {
+        if (DBG_STRESS) {
+            self.collect();
+        }
+
         var newObj = true;
         const obj = switch (tp) {
             .String => try Obj.String.intern(arg, &self.table, &newObj, self.allocator),
             else => try tp.get().init(arg, self.allocator),
         };
+
         if (newObj) {
-            if (DBG_STRESS) {
-                self.collect();
-            }
-            dbg_obj("O", "new", &obj.obj, true);
-            try self.objs.push(0, obj.cast());
+            const obj_p = obj.cast();
+
+            dbg_obj("O", "new", obj_p, true);
+            try self.objs.push(0, obj_p);
         }
+
         return obj;
     }
 
@@ -168,7 +206,7 @@ pub const GC = struct {
                 },
                 else => {},
             },
-            *Obj => if (!arg.fields.mark) {
+            *Obj => if (arg.fields.gc and !arg.fields.mark) {
                 dbg_obj(msg, "mark", arg, true);
                 arg.fields.mark = true;
                 self.greys.push(-1, arg) catch @panic("Grey stack overflow");
@@ -179,6 +217,10 @@ pub const GC = struct {
                 @compileError("Unable to mark " ++ @typeName(T));
             },
         }
+    }
+
+    pub fn exclude(obj: *Obj) void {
+        obj.fields.gc = false;
     }
 
     pub fn emplace_cast(self: *Self, comptime tp: Obj.Type, arg: tp.get().Arg) (ObjList.Error || tp.get().Error)!*Obj {

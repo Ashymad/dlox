@@ -327,9 +327,17 @@ pub fn Compiler(size: comptime_int) type {
                 }
             }
             if (isList) {
-                self.currentChunk().code.set(offset, self.makeObj(.Native, Obj.Native.Arg{ .name = "internal::list", .fun = vm_native.list }) catch return) catch return;
+                self.currentChunk().code.set(offset, self.makeObj(.Native, Obj.Native.Arg{
+                    .name = "list",
+                    .fun = vm_native.list,
+                    .type = .Literal,
+                }) catch return) catch return;
             } else {
-                self.currentChunk().code.set(offset, self.makeObj(.Native, Obj.Native.Arg{ .name = "internal::table", .fun = vm_native.table }) catch return) catch return;
+                self.currentChunk().code.set(offset, self.makeObj(.Native, Obj.Native.Arg{
+                    .name = "table",
+                    .fun = vm_native.table,
+                    .type = .Literal,
+                }) catch return) catch return;
             }
             self.emit(OP.CALL, argCount);
         }
@@ -533,13 +541,18 @@ pub fn Compiler(size: comptime_int) type {
                 self.lastError = err;
                 return;
             };
+
+            var compiler = Self.init_enclosed(self, fun) catch |err| {
+                self.errorAtPrevious("Couldn't init enclosed function");
+                self.lastError = err;
+                return;
+            };
+
             fun.set_name(self.objects.emplace(Obj.Type.String, &.{name}) catch |err| {
                 self.errorAtPrevious("Couldn't allocate function name");
                 self.lastError = err;
                 return;
             });
-
-            var compiler = Self.init_enclosed(self, fun);
 
             compiler.consume(Token.LEFT_PAREN, "Expect '(' after function name");
             if (!compiler.check(Token.RIGHT_PAREN)) {
@@ -720,7 +733,11 @@ pub fn Compiler(size: comptime_int) type {
 
             self.consume(Token.LEFT_PAREN, "Expect '(' after 'switch'.");
 
-            self.emitObj(.Native, Obj.Native.Arg{ .name = "internal::switch", .fun = vm_native.table }) catch return;
+            self.emitObj(.Native, Obj.Native.Arg{
+                .name = "switch",
+                .fun = vm_native.table,
+                .type = .Literal,
+            }) catch return;
 
             var jumpOver = self.emitJump(OP.JUMP);
             const switchExpression = self.currentChunk().code.len;
@@ -967,11 +984,13 @@ pub fn Compiler(size: comptime_int) type {
             return self;
         }
 
-        fn init_enclosed(enclosing: *Self, fun: *Obj.Function) Self {
+        fn init_enclosed(enclosing: *Self, fun: *Obj.Function) !Self {
             var enclosed = Self.init(enclosing.scanner, enclosing.objects, fun);
             enclosed.current = enclosing.current;
             enclosed.enclosing = enclosing;
             enclosed.beginScope();
+
+            try enclosing.objects.swap_callback(&gc_callback, &enclosed);
             return enclosed;
         }
 

@@ -39,3 +39,7 @@ pub fn list(gc: *GC, args: []const Value) Error!Value {
     }
     return Value.init(lis.cast());
 }
+
+pub fn typeof(gc: *GC, args: []const Value) Error!Value {
+    return Value.init(gc.emplace_cast(.String, &.{args[0].typeName()}) catch return Error.Native);
+}

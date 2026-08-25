@@ -49,7 +49,6 @@ pub fn Upvalue(fields: anytype) type {
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {
-            if (self.closed) self.location.destroy(allocator);
             allocator.destroy(self);
         }
     };
