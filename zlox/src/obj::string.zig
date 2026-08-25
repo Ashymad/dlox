@@ -12,9 +12,63 @@ pub fn String(fields: anytype) type {
 
     return packed struct {
         const Self = @This();
-        pub const Table = table.Table(*Self, void, hash.hash_t(*const Self), Self.eql);
+
         pub const Arg = []const []const u8;
-        pub const Error = error{ OutOfMemory, IndexOutOfBounds } || Table.Error;
+        pub const Error = error{ OutOfMemory, IndexOutOfBounds };
+
+        pub const Pool = struct {
+            pub const Table = table.Table(*Self, void, hash.hash_t(*const Self), Self.eql);
+            pub const Error = Table.Error;
+
+            table: Table,
+
+            pub fn init(allocator: std.mem.Allocator) Pool {
+                return .{ .table = Table.init(allocator) };
+            }
+
+            fn check(arg: Arg, len: usize, hsh: u32) struct {
+                arg: Arg,
+                len: usize,
+                hash: u32,
+
+                pub fn check(self: *const @This(), other: *const Self) bool {
+                    if (other.hash == self.hash and other.len == self.len) {
+                        var idx: usize = 0;
+                        for (self.arg) |el| {
+                            if (!std.mem.eql(u8, other.data()[idx .. idx + el.len], el))
+                                return false;
+                            idx += el.len;
+                        }
+                        return true;
+                    }
+                    return false;
+                }
+            } {
+                return @TypeOf(check(arg, len, hsh)){
+                    .arg = arg,
+                    .len = len,
+                    .hash = hsh,
+                };
+            }
+
+            pub fn put(self: *Pool, str: *Self) !void {
+                _ = try self.table.set(str, {});
+            }
+
+            pub fn find(self: *Pool, arg: Arg) ?*Self {
+                if (self.table.count == 0) return null;
+
+                const pre = Self.prehash(arg);
+
+                const entry = Table.find_(self.table.entries, pre.hash, check(arg, pre.len, pre.hash));
+
+                return if (entry.* != .some) null else entry.some.key;
+            }
+
+            pub fn free(self: *Pool) void {
+                self.table.deinit();
+            }
+        };
 
         obj: Super,
         len: usize = 0,
@@ -25,11 +79,11 @@ pub fn String(fields: anytype) type {
             return p + @sizeOf(Self);
         }
 
-        fn new(arg: Arg, params: ArgParams, allocator: std.mem.Allocator) Error!*Self {
-            const ret: *Self = @ptrCast(try allocator.alignedAlloc(u8, std.mem.Alignment.of(Self), @sizeOf(Self) + params.len));
+        fn new(arg: Arg, len: usize, hsh: u32, allocator: std.mem.Allocator) Error!*Self {
+            const ret: *Self = @ptrCast(try allocator.alignedAlloc(u8, std.mem.Alignment.of(Self), @sizeOf(Self) + len));
             ret.* = Self{
                 .obj = Super.make(Self),
-                .hash = params.hash,
+                .hash = hsh,
             };
             for (arg) |el| {
                 @memcpy(ret.data() + ret.len, el);
@@ -53,57 +107,30 @@ pub fn String(fields: anytype) type {
             return @intFromPtr(self) == @intFromPtr(other);
         }
         pub fn get(self: *const Self, index: value.Value) Error!value.Value {
-            if (!index.is(value.Value.number) or index.number >= @as(value.Value.tagType(value.Value.number), @floatFromInt(self.len)) or index.number < 0) {
+            if (!index.is(value.Value.number) or index.number >= @as(
+                value.Value.tagType(value.Value.number),
+                @floatFromInt(self.len),
+            ) or index.number < 0) {
                 return Error.IndexOutOfBounds;
             }
             return value.Value.init(self.data()[@intFromFloat(index.number)]);
         }
 
-        const ArgParams = struct { len: usize, hash: u32 };
-
-        fn table_check(m_arg: Arg, m_params: ArgParams) struct {
-            arg: Arg,
-            params: ArgParams,
-            pub fn check(self: *const @This(), k2: *const Self) bool {
-                if (k2.hash == self.params.hash and k2.len == self.params.len) {
-                    var idx: usize = 0;
-                    for (self.arg) |el| {
-                        if (!std.mem.eql(u8, k2.data()[idx .. idx + el.len], el))
-                            return false;
-                        idx += el.len;
-                    }
-                    return true;
-                }
-                return false;
-            }
-        } {
-            return @TypeOf(table_check(m_arg, m_params)){ .arg = m_arg, .params = m_params };
-        }
-
-        fn arg_params(arg: Arg) ArgParams {
-            var ret = ArgParams{ .len = 0, .hash = hash.hash_t([]const u8)(&.{}) };
+        fn prehash(arg: Arg) struct { len: usize, hash: u32 } {
+            var len: usize = 0;
+            var hsh = hash.hash_t([]const u8)(&.{});
 
             for (arg) |el| {
-                ret.len += el.len;
-                ret.hash = hash.hash_append(ret.hash, el);
+                len += el.len;
+                hsh = hash.hash_append(hsh, el);
             }
-            return ret;
+            return .{ .len = len, .hash = hsh };
         }
 
-        pub fn intern(arg: Arg, tabl: *Self.Table, isNewKey: *bool, allocator: std.mem.Allocator) Error!*Self {
-            const params = arg_params(arg);
+        pub fn init(arg: Arg, allocator: std.mem.Allocator) Error!*Self {
+            const pre = Self.prehash(arg);
 
-            try tabl.checkCapacity();
-            const entry = Self.Table.find_(tabl.entries, params.hash, table_check(arg, params));
-            isNewKey.* = entry.* != Self.Table.Entry.some;
-            if (isNewKey.*) {
-                _ = tabl.set_(entry, try new(arg, params, allocator), {});
-            }
-            return entry.some.key;
-        }
-
-        pub fn init(_: Arg, _: std.mem.Allocator) Error!*Self {
-            @compileError("The String Obj has to be interned");
+            return new(arg, pre.len, pre.hash, allocator);
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {

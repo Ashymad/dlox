@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const utils = @import("lib::utils.zig");
+const Value = @import("value.zig").Value;
 
 pub fn Obj(fields: anytype) type {
     return packed struct {
@@ -28,7 +29,7 @@ pub fn Obj(fields: anytype) type {
             Closure,
             Upvalue,
 
-            pub fn get(comptime self: @This()) type {
+            pub fn get(self: @This()) type {
                 return @field(Self, @tagName(self));
             }
         };
@@ -73,6 +74,19 @@ pub fn Obj(fields: anytype) type {
         pub fn free(obj: *Self, allocator: std.mem.Allocator) void {
             return switch (obj.type) {
                 inline else => |tp| obj._cast(tp).free(allocator),
+            };
+        }
+
+        pub fn from(arg: anytype) ?*Self {
+            const T = @TypeOf(arg);
+
+            return switch (T) {
+                Value => switch (arg) {
+                    .obj => |o| Self.from(o),
+                    else => null,
+                },
+                *Self => arg,
+                else => if (comptime Self.is_child(T)) arg.cast() else null,
             };
         }
 

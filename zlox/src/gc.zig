@@ -27,15 +27,18 @@ pub const GC = struct {
         }
     };
 
-    const DBG_STRESS = true;
+    const DBG_STRESS = false;
     const DBG_LOG = true;
+    const GC_HEAP_GROW_FACTOR = 2;
 
     allocator: std.mem.Allocator,
     io: std.Io,
-    table: Obj.String.Table,
+    pool: Obj.String.Pool,
     objs: ObjList,
     callbacks: CallbackList,
     greys: GreyList,
+    allocated: usize,
+    next: usize,
 
     fn dbg_print(comptime fmt: []const u8, args: anytype) void {
         if (DBG_LOG) {
@@ -47,10 +50,12 @@ pub const GC = struct {
         return Self{
             .allocator = allocator,
             .io = io,
-            .table = Obj.String.Table.init(allocator),
+            .pool = Obj.String.Pool.init(allocator),
             .objs = ObjList.init(allocator),
             .callbacks = CallbackList.init(allocator),
             .greys = GreyList.init(allocator),
+            .allocated = 0,
+            .next = 1024 * 1024,
         };
     }
 
@@ -60,6 +65,7 @@ pub const GC = struct {
             self.trace_references();
             self.table_remove_white();
             self.sweep();
+            self.next = self.allocated * GC_HEAP_GROW_FACTOR;
         }
     }
 
@@ -119,12 +125,14 @@ pub const GC = struct {
     }
 
     fn table_remove_white(self: *Self) void {
-        const tbl = &self.table;
-        tbl.for_each(tbl, struct {
-            pub fn fun(table: *Obj.String.Table, key: Obj.String.Table.Key, _: Obj.String.Table.Value) void {
+        const Table = Obj.String.Pool.Table;
+        const table = &self.pool.table;
+
+        table.for_each(table, struct {
+            pub fn fun(tbl: *Table, key: Table.Key, _: Table.Value) void {
                 const obj = key.cast();
                 if (obj.fields.gc and !obj.fields.mark)
-                    _ = table.delete(key);
+                    _ = tbl.delete(key);
             }
         }.fun);
     }
@@ -137,6 +145,9 @@ pub const GC = struct {
                     iter.pop();
                     dbg_obj("O", "free", obj, false);
                     obj.free(self.allocator);
+                    switch (obj.type) {
+                        inline else => |tp| self.allocated -= @sizeOf(tp.get()) + if (tp == .String) (obj.cast(tp) catch unreachable).len else 0,
+                    }
                 } else {
                     obj.fields.mark = false;
                 }
@@ -175,47 +186,37 @@ pub const GC = struct {
         }
     }
 
-    pub fn emplace(self: *Self, comptime tp: Obj.Type, arg: tp.get().Arg) (ObjList.Error || tp.get().Error)!*tp.get() {
-        if (DBG_STRESS) {
+    pub fn emplace(self: *Self, comptime tp: Obj.Type, arg: tp.get().Arg) (ObjList.Error || tp.get().Error || Obj.String.Pool.Error)!*tp.get() {
+        if (tp == .String)
+            if (self.pool.find(arg)) |obj|
+                return obj;
+
+        const chd = try tp.get().init(arg, self.allocator);
+
+        self.allocated += @sizeOf(tp.get()) + if (tp == .String) chd.len else 0;
+        if (DBG_STRESS or self.allocated > self.next) {
             self.collect();
         }
 
-        var newObj = true;
-        const obj = switch (tp) {
-            .String => try Obj.String.intern(arg, &self.table, &newObj, self.allocator),
-            else => try tp.get().init(arg, self.allocator),
-        };
+        if (tp == .String)
+            try self.pool.put(chd);
 
-        if (newObj) {
-            const obj_p = obj.cast();
+        const obj = chd.cast();
+        dbg_obj("O", "new", obj, true);
+        dbg_print("{d}/{d}\n", .{ self.allocated, self.next });
 
-            dbg_obj("O", "new", obj_p, true);
-            try self.objs.push(0, obj_p);
-        }
+        try self.objs.push(0, obj);
 
-        return obj;
+        return chd;
     }
 
     pub fn mark(self: *Self, msg: []const u8, arg: anytype) void {
-        const T = @TypeOf(arg);
-
-        switch (T) {
-            Value => switch (arg) {
-                .obj => |o| {
-                    self.mark(msg, o);
-                },
-                else => {},
-            },
-            *Obj => if (arg.fields.gc and !arg.fields.mark) {
-                dbg_obj(msg, "mark", arg, true);
-                arg.fields.mark = true;
-                self.greys.push(-1, arg) catch @panic("Grey stack overflow");
-            },
-            else => if (comptime Obj.is_child(T)) {
-                self.mark(msg, arg.cast());
-            } else {
-                @compileError("Unable to mark " ++ @typeName(T));
-            },
+        if (Obj.from(arg)) |obj| {
+            if (obj.fields.gc and !obj.fields.mark) {
+                dbg_obj(msg, "mark", obj, true);
+                obj.fields.mark = true;
+                self.greys.push(-1, obj) catch @panic("Grey stack overflow");
+            }
         }
     }
 
@@ -223,7 +224,7 @@ pub const GC = struct {
         obj.fields.gc = false;
     }
 
-    pub fn emplace_cast(self: *Self, comptime tp: Obj.Type, arg: tp.get().Arg) (ObjList.Error || tp.get().Error)!*Obj {
+    pub fn emplace_cast(self: *Self, comptime tp: Obj.Type, arg: tp.get().Arg) !*Obj {
         return (try self.emplace(tp, arg)).cast();
     }
 
@@ -236,6 +237,6 @@ pub const GC = struct {
             el.free(self.allocator);
         }
         self.objs.free();
-        self.table.deinit();
+        self.pool.free();
     }
 };
