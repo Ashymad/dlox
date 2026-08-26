@@ -43,3 +43,8 @@ pub fn list(gc: *GC, args: []const Value) Error!Value {
 pub fn typeof(gc: *GC, args: []const Value) Error!Value {
     return Value.init(gc.emplace_cast(.String, &.{args[0].typeName()}) catch return Error.Native);
 }
+
+pub fn rungc(gc: *GC, _: []const Value) Error!Value {
+    gc.collect();
+    return Value.init({});
+}

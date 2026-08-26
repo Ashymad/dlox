@@ -7,7 +7,13 @@ const Value = @import("value.zig").Value;
 const VM = @import("vm.zig").VM;
 
 pub const GC = struct {
-    pub const Obj = @import("obj.zig").Obj(.{ .gc = true, .mark = false });
+    pub const Color = enum(u8) {
+        White,
+        Black,
+        None,
+    };
+
+    pub const Obj = @import("obj.zig").Obj(.{ .color = Color.White });
 
     const Self = @This();
 
@@ -28,7 +34,7 @@ pub const GC = struct {
     };
 
     const DBG_STRESS = false;
-    const DBG_LOG = true;
+    const DBG_LOG = false;
     const GC_HEAP_GROW_FACTOR = 2;
 
     allocator: std.mem.Allocator,
@@ -59,7 +65,7 @@ pub const GC = struct {
         };
     }
 
-    fn collect(self: *Self) void {
+    pub fn collect(self: *Self) void {
         if (self.callbacks.len() > 0) {
             self.mark_roots();
             self.trace_references();
@@ -131,7 +137,7 @@ pub const GC = struct {
         table.for_each(table, struct {
             pub fn fun(tbl: *Table, key: Table.Key, _: Table.Value) void {
                 const obj = key.cast();
-                if (obj.fields.gc and !obj.fields.mark)
+                if (obj.fields.color == .White)
                     _ = tbl.delete(key);
             }
         }.fun);
@@ -140,17 +146,16 @@ pub const GC = struct {
     fn sweep(self: *Self) void {
         var iter = self.objs.iter();
         while (iter.next()) |obj| {
-            if (obj.fields.gc) {
-                if (!obj.fields.mark) {
-                    iter.pop();
-                    dbg_obj("O", "free", obj, false);
-                    obj.free(self.allocator);
-                    switch (obj.type) {
-                        inline else => |tp| self.allocated -= @sizeOf(tp.get()) + if (tp == .String) (obj.cast(tp) catch unreachable).len else 0,
-                    }
-                } else {
-                    obj.fields.mark = false;
+            if (obj.fields.color == .White) {
+                iter.pop();
+                dbg_obj("O", "free", obj, false);
+                switch (obj.type) {
+                    inline else => |tp| self.allocated -= @sizeOf(tp.get()),
                 }
+                if (obj.cast_if(.String)) |str| self.allocated -= str.len;
+                obj.free(self.allocator);
+            } else if (obj.fields.color == .Black) {
+                obj.fields.color = .White;
             }
         }
     }
@@ -193,7 +198,9 @@ pub const GC = struct {
 
         const chd = try tp.get().init(arg, self.allocator);
 
-        self.allocated += @sizeOf(tp.get()) + if (tp == .String) chd.len else 0;
+        self.allocated += @sizeOf(tp.get());
+        if (tp == .String) self.allocated += chd.len;
+
         if (DBG_STRESS or self.allocated > self.next) {
             self.collect();
         }
@@ -203,7 +210,6 @@ pub const GC = struct {
 
         const obj = chd.cast();
         dbg_obj("O", "new", obj, true);
-        dbg_print("{d}/{d}\n", .{ self.allocated, self.next });
 
         try self.objs.push(0, obj);
 
@@ -212,16 +218,16 @@ pub const GC = struct {
 
     pub fn mark(self: *Self, msg: []const u8, arg: anytype) void {
         if (Obj.from(arg)) |obj| {
-            if (obj.fields.gc and !obj.fields.mark) {
+            if (obj.fields.color == .White) {
                 dbg_obj(msg, "mark", obj, true);
-                obj.fields.mark = true;
+                obj.fields.color = .Black;
                 self.greys.push(-1, obj) catch @panic("Grey stack overflow");
             }
         }
     }
 
     pub fn exclude(obj: *Obj) void {
-        obj.fields.gc = false;
+        obj.fields.color = .None;
     }
 
     pub fn emplace_cast(self: *Self, comptime tp: Obj.Type, arg: tp.get().Arg) !*Obj {

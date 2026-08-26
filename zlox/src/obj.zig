@@ -95,8 +95,11 @@ pub fn Obj(fields: anytype) type {
         }
 
         pub fn cast(self: anytype, comptime tp: Type) Error!utils.copy_const(@TypeOf(self), *tp.get()) {
-            if (!self.is(tp)) return Error.IllegalCastError;
-            return self._cast(tp);
+            return if (self.is(tp)) self._cast(tp) else Error.IllegalCastError;
+        }
+
+        pub fn cast_if(self: anytype, comptime tp: Type) ?utils.copy_const(@TypeOf(self), *tp.get()) {
+            return if (self.is(tp)) self._cast(tp) else null;
         }
 
         fn _cast(self: anytype, comptime tp: Type) utils.copy_const(@TypeOf(self), *tp.get()) {

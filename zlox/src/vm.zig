@@ -101,6 +101,7 @@ pub const VM = struct {
         try self.defineNative("typeof", 1, 1, native.typeof);
         try self.defineNative("table", 0, Obj.Native.ArityMax, native.table);
         try self.defineNative("list", 0, Obj.Native.ArityMax, native.list);
+        try self.defineNative("rungc", 0, 0, native.rungc);
 
         native.Clock.set_start(io);
 
@@ -297,10 +298,13 @@ pub const VM = struct {
             }
 
             fn binary_op(self: *@This(), comptime in_tag: anytype, comptime out_tag: anytype, op: callbacks.Type(in_tag, out_tag)) InterpreterError!void {
-                const b = self.pop();
-                const a = self.pop();
+                const b = self.peek(0);
+                const a = self.peek(1);
                 if (a.is(in_tag) and b.is(in_tag)) {
-                    self.push(Value.init(try op.call(a.get(in_tag), b.get(in_tag))));
+                    const val = Value.init(try op.call(a.get(in_tag), b.get(in_tag)));
+                    _ = self.pop();
+                    _ = self.pop();
+                    self.push(val);
                 } else {
                     self.runtimeError("Operands have invalid types, expected: {s}", .{@tagName(in_tag)});
                     return InterpreterError.RuntimeError;
