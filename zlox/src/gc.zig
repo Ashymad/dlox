@@ -99,8 +99,6 @@ pub const GC = struct {
                 }.fun);
             },
             *Obj.Function => {
-                if (obj.name.ptr()) |name|
-                    self.mark("f", name);
                 for (obj.chunk.ptr().constants.slice()) |constant|
                     self.mark("f", constant);
             },

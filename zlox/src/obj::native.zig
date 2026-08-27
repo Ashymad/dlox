@@ -25,7 +25,6 @@ pub fn Native(fields: anytype) type {
             fun: Fn,
             arity_min: u8 = ArityMin,
             arity_max: u8 = ArityMax,
-            name: []const u8 = "",
             type: Type = .Builtin,
         };
 
@@ -33,7 +32,6 @@ pub fn Native(fields: anytype) type {
         fun: Packed(Fn),
         arity_min: u8,
         arity_max: u8,
-        name: Packed([]const u8),
         type: Type,
 
         pub fn init(arg: Arg, allocator: std.mem.Allocator) Error!*Self {
@@ -43,7 +41,6 @@ pub fn Native(fields: anytype) type {
                 .fun = Packed(Fn).init(arg.fun),
                 .arity_min = arg.arity_min,
                 .arity_max = arg.arity_max,
-                .name = Packed([]const u8).init(arg.name),
                 .type = arg.type,
             };
             return self;
@@ -63,7 +60,6 @@ pub fn Native(fields: anytype) type {
                 .Builtin => _ = try writer.write("<B: "),
                 .Literal => _ = try writer.write("<L: "),
             }
-            _ = try writer.write(self.name.ptr());
             _ = try writer.writeAll(">");
         }
 

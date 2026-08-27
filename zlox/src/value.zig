@@ -56,6 +56,13 @@ pub const Value = union(enum) {
         };
     }
 
+    pub fn cast_if(self: Self, comptime tag: anytype) if (@TypeOf(tag) == Tag) ?utils.typeFromTag(Self, tag) else ?*Obj.Type.get(tag) {
+        return switch (self) {
+            toTag(tag) => if (@TypeOf(tag) == Tag) self.get(tag) else self.obj.cast_if(tag),
+            else => null,
+        };
+    }
+
     pub fn get(self: Self, comptime tag: anytype) tagType(tag) {
         return @field(self, @tagName(toTag(tag)));
     }

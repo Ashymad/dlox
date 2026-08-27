@@ -115,6 +115,7 @@ pub fn Compiler(size: comptime_int) type {
                     T.NIL           => R(S.literal,  null,      P.NONE ),
                     T.OR            => R(null,       S._or,     P.OR ),
                     T.TRUE          => R(S.literal,  null,      P.NONE ),
+                    T.FUN           => R(S.function, null,      P.NONE ),
                     else            => R(null,       null,      P.NONE ),
                     // zig fmt: on
                 };
@@ -328,13 +329,11 @@ pub fn Compiler(size: comptime_int) type {
             }
             if (isList) {
                 self.currentChunk().code.set(offset, self.makeObj(.Native, Obj.Native.Arg{
-                    .name = "list",
                     .fun = vm_native.list,
                     .type = .Literal,
                 }) catch return) catch return;
             } else {
                 self.currentChunk().code.set(offset, self.makeObj(.Native, Obj.Native.Arg{
-                    .name = "table",
                     .fun = vm_native.table,
                     .type = .Literal,
                 }) catch return) catch return;
@@ -515,9 +514,7 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn declaration(self: *Self) void {
-            if (self.match(Token.FUN)) {
-                self.funDeclaration();
-            } else if (self.match(Token.VAR)) {
+            if (self.match(Token.VAR)) {
                 self.varDeclaration();
             } else if (self.match(Token.CON)) {
                 self.conDeclaration();
@@ -528,15 +525,8 @@ pub fn Compiler(size: comptime_int) type {
             if (self.panicMode) self.synchronize();
         }
 
-        fn funDeclaration(self: *Self) void {
-            const global = self.parseVariable("Expect function name.", true) catch return;
-            self.markInitialized();
-            self.function(self.previous.lexeme, Obj.Function.Type.Function);
-            self.defineVariable(global, true);
-        }
-
-        fn function(self: *Self, name: []const u8, tp: Obj.Function.Type) void {
-            var fun = self.objects.emplace(Obj.Type.Function, tp) catch |err| {
+        fn function(self: *Self, _: bool) void {
+            var fun = self.objects.emplace(Obj.Type.Function, .Function) catch |err| {
                 self.errorAtPrevious("Couldn't allocate function");
                 self.lastError = err;
                 return;
@@ -547,12 +537,6 @@ pub fn Compiler(size: comptime_int) type {
                 self.lastError = err;
                 return;
             };
-
-            fun.set_name(self.objects.emplace(Obj.Type.String, &.{name}) catch |err| {
-                self.errorAtPrevious("Couldn't allocate function name");
-                self.lastError = err;
-                return;
-            });
 
             compiler.consume(Token.LEFT_PAREN, "Expect '(' after function name");
             if (!compiler.check(Token.RIGHT_PAREN)) {
@@ -734,7 +718,6 @@ pub fn Compiler(size: comptime_int) type {
             self.consume(Token.LEFT_PAREN, "Expect '(' after 'switch'.");
 
             self.emitObj(.Native, Obj.Native.Arg{
-                .name = "switch",
                 .fun = vm_native.table,
                 .type = .Literal,
             }) catch return;
@@ -1005,7 +988,7 @@ pub fn Compiler(size: comptime_int) type {
 
         pub fn compile(source: []const u8, objects: *GC) CompilerError!*Obj.Function {
             var scan = try scanner.Scanner.init(source);
-            const fun = try objects.emplace(Obj.Type.Function, Obj.Function.Type.Script);
+            const fun = try objects.emplace(Obj.Type.Function, .Script);
             var self = Self.init(&scan, objects, fun);
 
             try objects.push_callback(&gc_callback, &self);

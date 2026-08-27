@@ -8,10 +8,10 @@ const Obj = @import("obj.zig").Obj;
 
 pub fn Function(fields: anytype) type {
     const Super = Obj(fields);
-    const String = Super.String;
 
     return packed struct {
         const Self = @This();
+
         pub const Arg = Type;
         pub const Error = error{OutOfMemory};
 
@@ -20,26 +20,20 @@ pub fn Function(fields: anytype) type {
         obj: Super,
         arity: u8,
         chunk: Packed(*chunk.Chunk),
-        name: Packed(?*String),
         type: Type,
         upvalue_count: u8,
 
-        pub fn init(tp: Arg, allocator: std.mem.Allocator) Error!*Self {
+        pub fn init(tpe: Arg, allocator: std.mem.Allocator) Error!*Self {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
                 .chunk = try Packed(*chunk.Chunk).create(allocator),
                 .arity = 0,
-                .name = Packed(?*String).init(null),
-                .type = tp,
+                .type = tpe,
                 .upvalue_count = 0,
             };
             self.chunk.set(try chunk.Chunk.init(allocator));
             return self;
-        }
-
-        pub fn set_name(self: *Self, name: *String) void {
-            self.name = Packed(?*String).init(name);
         }
 
         pub fn cast(self: anytype) utils.copy_const(@TypeOf(self), *Super) {
@@ -50,11 +44,6 @@ pub fn Function(fields: anytype) type {
             switch (self.type) {
                 .Function => _ = try writer.write("<F: "),
                 .Script => _ = try writer.write("<S: "),
-            }
-            if (self.name.ptr()) |name| {
-                _ = try writer.write(name.slice());
-            } else {
-                _ = try writer.write("-");
             }
             _ = try writer.writeAll(">");
         }

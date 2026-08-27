@@ -7,15 +7,15 @@ const Obj = @import("gc.zig").GC.Obj;
 const Error = Obj.Error;
 const print = std.debug.print;
 
-pub fn disassembleChunk(ch: *const chunk.Chunk, name: []const u8) Error!void {
-    print("/= {s} =\\\n", .{name});
+pub fn disassembleChunk(ch: *const chunk.Chunk) Error!void {
+    print("/=======\\\n", .{});
 
     var offset: usize = 0;
 
     while (offset < ch.code.len) {
         offset = try _disassembleInstruction(ch, offset, true);
     }
-    print("\\= {s} =/\n", .{name});
+    print("\\=======/\n", .{});
 }
 
 pub fn print_offset(ch: *const chunk.Chunk, offset: usize) !void {
@@ -88,14 +88,9 @@ fn constantInstruction(name: []const u8, ch: *const chunk.Chunk, offset: usize, 
     const constant = try ch.code.get(offset + 1);
     const constval = try ch.constants.get(constant);
     print("{s:<32} {d:4} '{f}'\n", .{ name, constant, constval });
-    if (print_fn and constval.is(Obj.Type.Function)) {
-        const function = constval.obj.cast(.Function) catch unreachable;
-        if (function.name.get()) |fn_name| {
-            try disassembleChunk(function.chunk.ptr(), fn_name.slice());
-        } else {
-            try disassembleChunk(function.chunk.ptr(), "<anon>");
-        }
-    }
+    if (print_fn) if (constval.cast_if(Obj.Type.Function)) |function| {
+        try disassembleChunk(function.chunk.ptr());
+    };
     return offset + 2;
 }
 
@@ -126,13 +121,8 @@ fn closureInstruction(name: []const u8, ch: *const chunk.Chunk, offset: usize, p
         print("{s:<38}|-> {s} {d}\n", .{ "", if (isLocal == 1) "local" else "upvalue", idx });
         off += 2;
     }
-    if (print_fn) {
-        if (function.name.get()) |fn_name| {
-            try disassembleChunk(function.chunk.ptr(), fn_name.slice());
-        } else {
-            try disassembleChunk(function.chunk.ptr(), "<anon>");
-        }
-    }
+    if (print_fn)
+        try disassembleChunk(function.chunk.ptr());
 
     return off + 1;
 }

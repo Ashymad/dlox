@@ -28,6 +28,12 @@ pub fn Array(comptime T: type, comptime S: type, comptime size: S) type {
             return self.data[idx];
         }
 
+        pub fn if_get(self: *const @This(), idx: S) ?T {
+            if (idx >= self.len)
+                return null;
+            return self.data[idx];
+        }
+
         pub fn set(self: *const @This(), idx: S, val: T) !void {
             if (idx >= self.len)
                 return error.IndexOutOfBounds;
@@ -37,6 +43,12 @@ pub fn Array(comptime T: type, comptime S: type, comptime size: S) type {
         pub fn last(self: *const @This()) !T {
             if (self.len == 0)
                 return error.IndexOutOfBounds;
+            return self.data[self.len - 1];
+        }
+
+        pub fn if_last(self: *const @This()) ?T {
+            if (self.len == 0)
+                return null;
             return self.data[self.len - 1];
         }
 

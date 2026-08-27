@@ -33,13 +33,8 @@ pub fn Closure(fields: anytype) type {
             return @ptrCast(self);
         }
 
-        pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
+        pub fn format(_: *const Self, writer: *std.Io.Writer) !void {
             _ = try writer.write("<C: ");
-            if (self.function.ptr().name.get()) |fn_name| {
-                _ = try writer.write(fn_name.slice());
-            } else {
-                _ = try writer.write("-");
-            }
             _ = try writer.writeAll(">");
         }
 

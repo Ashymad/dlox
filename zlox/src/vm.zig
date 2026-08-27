@@ -68,9 +68,9 @@ pub const VM = struct {
     fn defineNative(self: *@This(), name: []const u8, arity_min: u8, arity_max: u8, fun: Obj.Native.Fn) !void {
         const nameObj = try self.objects.emplace(.String, &.{name});
         GC.exclude(nameObj.cast());
+
         const funObj = try self.objects.emplace_cast(.Native, Obj.Native.Arg{
             .fun = fun,
-            .name = nameObj.slice(),
             .arity_min = arity_min,
             .arity_max = arity_max,
         });
@@ -117,7 +117,7 @@ pub const VM = struct {
 
         const function = try compiler.Compiler(stack_size).compile(source, &self.objects);
 
-        if (dbg) try debug.disassembleChunk(function.chunk.ptr(), "Main");
+        if (dbg) try debug.disassembleChunk(function.chunk.ptr());
 
         try Interpreter(callstack_size, stack_size).run(self, function, dbg);
     }

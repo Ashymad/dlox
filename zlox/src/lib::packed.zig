@@ -118,7 +118,7 @@ pub fn Packed(Type: type) type {
             }
         }
 
-        pub fn set(self: Self, val: if (many or slice) Ptr else Child) void {
+        pub fn set(self: Self, val: if (many or slice) utils.mod_ptr_t(Ptr, "const", true) else Child) void {
             if (many or slice)
                 @memcpy(self.ptr(), val)
             else
