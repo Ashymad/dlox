@@ -102,6 +102,7 @@ pub const VM = struct {
         try self.defineNative("table", 0, Obj.Native.ArityMax, native.table);
         try self.defineNative("list", 0, Obj.Native.ArityMax, native.list);
         try self.defineNative("rungc", 0, 0, native.rungc);
+        try self.defineNative("len", 1, 1, native.len);
 
         native.Clock.set_start(io);
 

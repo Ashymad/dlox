@@ -41,16 +41,18 @@ pub fn List(T: type) type {
                 return ret;
             }
 
-            pub fn add_prev(self: *Element, gpa: std.mem.Allocator, val: Value) !void {
+            pub fn add_prev(self: *Element, gpa: std.mem.Allocator, val: Value) !*Element {
                 self.prev.next = try Element.init(gpa, self.prev, self, val);
                 self.prev = self.prev.next;
                 if (self.next == self) self.next = self.prev;
+                return self.prev;
             }
 
-            pub fn add_next(self: *Element, gpa: std.mem.Allocator, val: Value) !void {
+            pub fn add_next(self: *Element, gpa: std.mem.Allocator, val: Value) !*Element {
                 self.next.prev = try Element.init(gpa, self, self.next, val);
                 self.next = self.next.prev;
                 if (self.prev == self) self.prev = self.next;
+                return self.next;
             }
 
             pub fn new(gpa: std.mem.Allocator, val: Value) !*Element {
@@ -96,9 +98,9 @@ pub fn List(T: type) type {
                     if (@"const") @compileError("Cannot call push() on a const Iterator");
 
                     if (self.this) |el| {
-                        try self.super.insert(false, el, val);
+                        self.super.retip(el, try self.super.insert(.prev, el, val));
                     } else if (self.super.tip) |el| {
-                        try self.super.insert(true, el.prev, val);
+                        _ = try self.super.insert(.prev, el, val);
                     } else {
                         try self.super.begin(val);
                     }
@@ -156,10 +158,10 @@ pub fn List(T: type) type {
         }
 
         fn at(self: *Self, idx: isize) Error!*Element {
-            return if (@abs(idx) >= self._len and idx < -self._len)
-                Error.IndexOutOfBounds
+            return if (-self._len <= idx and idx < self._len)
+                try self._at(idx)
             else
-                try self._at(idx);
+                Error.IndexOutOfBounds;
         }
 
         pub fn set(self: *Self, idx: isize, val: Value) Error!void {
@@ -196,25 +198,34 @@ pub fn List(T: type) type {
             self._len = 1;
         }
 
-        fn insert(self: *Self, after: bool, anchor: *Element, val: Value) !void {
-            if (after) {
-                try anchor.add_next(self.gpa, val);
-            } else {
+        fn insert(self: *Self, dir: enum { next, prev }, anchor: *Element, val: Value) !*Element {
+            const new = if (dir == .next)
+                try anchor.add_next(self.gpa, val)
+            else
                 try anchor.add_prev(self.gpa, val);
 
-                if (self.tip == anchor) self.tip = anchor.prev;
-            }
-
             self._len += 1;
+
+            return new;
+        }
+
+        fn retip(self: *Self, old: ?*Element, new: *Element) void {
+            if (self.tip == old) self.tip = new;
         }
 
         pub fn push(self: *Self, idx: isize, val: Value) Error!void {
-            if (@abs(idx) > self._len and idx < -self._len - 1) {
-                return Error.IndexOutOfBounds;
-            } else {
+            const len1 = self._len + 1;
+
+            if (-len1 <= idx and idx < len1) {
                 const el = self._at(idx) catch return self.begin(val);
 
-                try self.insert(idx < 0, el, val);
+                const new = try self.insert(if (idx < 0) .next else .prev, el, val);
+
+                if (idx == -len1 or idx == 0) {
+                    self.tip = new;
+                }
+            } else {
+                return Error.IndexOutOfBounds;
             }
         }
     };

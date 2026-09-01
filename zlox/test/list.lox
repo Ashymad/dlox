@@ -1,0 +1,8 @@
+con a = [];
+
+a[0] = 1;
+print a;
+a[1] = 2;
+print a;
+a[-3] = 0;
+print a;

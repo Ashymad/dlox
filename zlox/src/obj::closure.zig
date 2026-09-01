@@ -34,8 +34,7 @@ pub fn Closure(fields: anytype) type {
         }
 
         pub fn format(_: *const Self, writer: *std.Io.Writer) !void {
-            _ = try writer.write("<C: ");
-            _ = try writer.writeAll(">");
+            _ = try writer.write("<Closure>");
         }
 
         pub fn eql(_: *const Self, _: *const Self) bool {

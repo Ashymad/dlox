@@ -1,9 +1,9 @@
-con fib = fun(n) {
+fun fib(n) {
   if (n < 2) return n;
   return fib(n - 2) + fib(n - 1);
-};
+}
 
-con printf = fun(fmt, args) {
+fun printf(fmt, args) {
     var args_i = 0;
     for(var i = 0; fmt[i]; i = i + 1) {
         if(fmt[i] == '{' and fmt[i+1] == '}') {
@@ -15,15 +15,15 @@ con printf = fun(fmt, args) {
         }
     }
     print "";
-};
+}
 
-con main = fun() {
+fun main() {
     con num = 28;
     con start = clock();
     con result = fib(num);
     con end = clock() - start;
 
     printf("fib({}) == {}, time: {} ms", [num, result, end]);
-};
+}
 
 main();

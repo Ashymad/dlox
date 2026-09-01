@@ -57,10 +57,9 @@ pub fn Native(fields: anytype) type {
 
         pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
             switch (self.type) {
-                .Builtin => _ = try writer.write("<B: "),
-                .Literal => _ = try writer.write("<L: "),
+                .Builtin => _ = try writer.write("<Builtin>"),
+                .Literal => _ = try writer.write("<Literal> "),
             }
-            _ = try writer.writeAll(">");
         }
 
         pub fn eql(_: *const Self, _: *const Self) bool {

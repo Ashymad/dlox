@@ -1,0 +1,20 @@
+fun mk() {
+    var i = 0;
+    var l = [];
+    return fun() {
+        l[len(l)] = i = i + 1;
+        print l;
+    };
+}
+
+con f = mk();
+
+f();
+f();
+f();
+
+con f2 = mk();
+
+f2();
+f2();
+f2();

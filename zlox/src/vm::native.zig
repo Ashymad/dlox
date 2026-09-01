@@ -48,3 +48,16 @@ pub fn rungc(gc: *GC, _: []const Value) Error!Value {
     gc.collect();
     return Value.init({});
 }
+
+pub fn len(_: *GC, val: []const Value) Error!Value {
+    if (val[0].cast_if(Value.obj)) |obj| {
+        const ret = switch (obj.type) {
+            .String => (obj.cast(.String) catch unreachable).len,
+            .Table => (obj.cast(.Table) catch unreachable).table.ptr().count,
+            .List => (obj.cast(.List) catch unreachable).list.ptr().len(),
+            else => return Error.Native,
+        };
+        return Value.init(@as(f64, @floatFromInt(ret)));
+    }
+    return Error.Native;
+}
