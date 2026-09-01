@@ -27,6 +27,8 @@ pub const OP = enum(u8) {
     SET_GLOBAL,
     GET_LOCAL,
     SET_LOCAL,
+    GET_PROPERTY,
+    SET_PROPERTY,
     GET_UPVALUE,
     SET_UPVALUE,
     JUMP_IF_FALSE,

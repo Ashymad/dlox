@@ -17,8 +17,20 @@ pub fn Obj(fields: anytype) type {
         pub const Native = @import("obj::native.zig").Native(fields);
         pub const Closure = @import("obj::closure.zig").Closure(fields);
         pub const Upvalue = @import("obj::upvalue.zig").Upvalue(fields);
+        pub const Class = @import("obj::class.zig").Class(fields);
+        pub const Instance = @import("obj::instance.zig").Instance(fields);
 
-        pub const Error = error{IllegalCastError} || List.Error || String.Error || Table.Error || Function.Error || Native.Error || List.Error || Closure.Error || Upvalue.Error;
+        pub const Error = error{IllegalCastError} //
+            || List.Error //
+            || String.Error //
+            || Table.Error //
+            || Function.Error //
+            || Native.Error //
+            || List.Error //
+            || Closure.Error //
+            || Upvalue.Error //
+            || Class.Error //
+            || Instance.Error;
 
         pub const Type = enum(u8) {
             String,
@@ -28,6 +40,8 @@ pub fn Obj(fields: anytype) type {
             List,
             Closure,
             Upvalue,
+            Class,
+            Instance,
 
             pub fn get(self: @This()) type {
                 return @field(Self, @tagName(self));

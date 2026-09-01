@@ -19,14 +19,12 @@ pub fn Table(fields: anytype) type {
 
         obj: Super,
         table: Packed(*Self.Table),
-        len: usize,
 
         pub fn init(_: Arg, allocator: std.mem.Allocator) Error!*Self {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
                 .table = try Packed(*Self.Table).create(allocator),
-                .len = 0,
             };
             self.table.set(Self.Table.init(allocator));
             return self;
@@ -37,7 +35,6 @@ pub fn Table(fields: anytype) type {
         }
 
         pub fn set(self: *Self, key: Value, val: Value) Error!bool {
-            self.len += 1;
             return self.table.ptr().set(key, val);
         }
 
@@ -46,7 +43,7 @@ pub fn Table(fields: anytype) type {
         }
 
         pub fn delete(self: *Self, key: Value) void {
-            if (self.table.ptr().delete(key)) self.len -= 1;
+            _ = self.table.ptr().delete(key);
         }
 
         pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
@@ -64,7 +61,7 @@ pub fn Table(fields: anytype) type {
                 }
             };
 
-            var printer = Printer{ .writer = writer, .count = self.len };
+            var printer = Printer{ .writer = writer, .count = self.table.ptr().count };
             _ = try writer.write("[");
             if (self.table.ptr().count > 0) {
                 try self.table.ptr().for_each_try(&printer, Printer.print);

@@ -116,6 +116,8 @@ pub fn Compiler(size: comptime_int) type {
                     T.OR            => R(null,       S._or,     P.OR ),
                     T.TRUE          => R(S.literal,  null,      P.NONE ),
                     T.FUN           => R(S.function, null,      P.NONE ),
+                    T.CLASS         => R(S.class,    null,      P.NONE ),
+                    T.DOT           => R(null,       S.dot,     P.CALL ),
                     else            => R(null,       null,      P.NONE ),
                     // zig fmt: on
                 };
@@ -267,6 +269,18 @@ pub fn Compiler(size: comptime_int) type {
         fn call(self: *Self, _: bool) void {
             const argCount = self.argumentList();
             self.emit(OP.CALL, argCount);
+        }
+
+        fn dot(self: *Self, canAssign: bool) void {
+            self.consume(Token.IDENTIFIER, "Expect property name after '.'");
+            const name = self.identifierConstant(self.previous) catch return;
+
+            if (canAssign and self.match(Token.EQUAL)) {
+                self.expression();
+                self.emit(OP.SET_PROPERTY, name);
+            } else {
+                self.emit(OP.GET_PROPERTY, name);
+            }
         }
 
         fn argumentList(self: *Self) u8 {
@@ -514,7 +528,9 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn declaration(self: *Self) void {
-            if (self.match(Token.FUN)) {
+            if (self.match(Token.CLASS)) {
+                self.classDeclaration();
+            } else if (self.match(Token.FUN)) {
                 self.funDeclaration();
             } else if (self.match(Token.VAR)) {
                 self.varDeclaration();
@@ -525,6 +541,26 @@ pub fn Compiler(size: comptime_int) type {
             }
 
             if (self.panicMode) self.synchronize();
+        }
+
+        fn classDeclaration(self: *Self) void {
+            const global = self.parseVariable("Expect class name.", true) catch return;
+            self.markInitialized();
+            self.class(false);
+            self.defineVariable(global, true);
+        }
+
+        fn class(self: *Self, _: bool) void {
+            self.consume(Token.LEFT_BRACE, "Expect '{' before class body");
+            self.consume(Token.RIGHT_BRACE, "Expect '}' after class body");
+
+            const cls = self.objects.emplace_cast(Obj.Type.Class, {}) catch |err| {
+                self.errorAtPrevious("Couldn't allocate class");
+                self.lastError = err;
+                return;
+            };
+
+            self.emit(OP.CONSTANT, self.makeConstant(Value.init(cls)));
         }
 
         fn funDeclaration(self: *Self) void {

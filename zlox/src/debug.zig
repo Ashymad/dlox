@@ -63,6 +63,8 @@ fn _disassembleInstruction(ch: *const chunk.Chunk, offset: usize, print_fn: bool
         @intFromEnum(OP.SET_LOCAL) => try byteInstruction(name, ch, offset),
         @intFromEnum(OP.GET_UPVALUE) => try byteInstruction(name, ch, offset),
         @intFromEnum(OP.SET_UPVALUE) => try byteInstruction(name, ch, offset),
+        @intFromEnum(OP.GET_PROPERTY) => try byteInstruction(name, ch, offset),
+        @intFromEnum(OP.SET_PROPERTY) => try byteInstruction(name, ch, offset),
         @intFromEnum(OP.JUMP_IF_FALSE) => try jumpInstruction(name, true, ch, offset),
         @intFromEnum(OP.JUMP_POP) => simpleInstruction(name, offset),
         @intFromEnum(OP.JUMP) => try jumpInstruction(name, true, ch, offset),

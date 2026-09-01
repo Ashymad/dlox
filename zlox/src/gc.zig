@@ -88,8 +88,6 @@ pub const GC = struct {
         const T = @TypeOf(obj);
 
         switch (T) {
-            *Obj.String => {},
-            *Obj.Native => {},
             *Obj.Table => {
                 obj.table.ptr().for_each(self, struct {
                     pub fn fun(s: *Self, key: Obj.Table.Table.Key, val: Obj.Table.Table.Value) void {
@@ -118,7 +116,16 @@ pub const GC = struct {
                 if (obj.closed)
                     self.mark("u", obj.location.get());
             },
-            else => @compileError("Invalid type: " ++ @typeName(T)),
+            *Obj.Instance => {
+                self.mark("i", obj.cls.ptr());
+                obj.fields.ptr().for_each(self, struct {
+                    pub fn fun(s: *Self, key: Obj.Instance.Fields.Key, val: Obj.Instance.Fields.Value) void {
+                        s.mark("i", key);
+                        s.mark("i", val);
+                    }
+                }.fun);
+            },
+            else => {},
         }
     }
 

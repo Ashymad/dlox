@@ -225,17 +225,32 @@ pub const VM = struct {
                 return (self.stackTop - (1 + distance))[0];
             }
 
+            fn pook(self: *@This(), distance: usize, val: Value) void {
+                (self.stackTop - (1 + distance))[0] = val;
+            }
+
             fn callValue(self: *@This(), callee: Value, argCount: u8) !void {
-                if (callee.is(Obj.Type.Function)) {
-                    try self.callFunction(callee.obj.cast(.Function) catch unreachable, argCount);
-                } else if (callee.is(Obj.Type.Closure)) {
-                    try self.callClosure(callee.obj.cast(.Closure) catch unreachable, argCount);
-                } else if (callee.is(Obj.Type.Native)) {
-                    try self.callNative(callee.obj.cast(.Native) catch unreachable, argCount);
+                if (callee.cast_if(Obj.Type.Function)) |fun| {
+                    try self.callFunction(fun, argCount);
+                } else if (callee.cast_if(Obj.Type.Closure)) |clo| {
+                    try self.callClosure(clo, argCount);
+                } else if (callee.cast_if(Obj.Type.Native)) |nat| {
+                    try self.callNative(nat, argCount);
+                } else if (callee.cast_if(Obj.Type.Class)) |cls| {
+                    try self.callClass(cls, argCount);
                 } else {
                     self.runtimeError("Can only call functions and classes", .{});
                     return InterpreterError.RuntimeError;
                 }
+            }
+
+            fn callClass(self: *@This(), callee: *Obj.Class, argCount: u8) !void {
+                if (argCount != 0) {
+                    self.runtimeError("Expected {d} arguments but got {d}", .{ 0, argCount });
+                    return InterpreterError.RuntimeError;
+                }
+
+                self.pook(argCount, Value.init(try self.vm.objects.emplace_cast(.Instance, callee)));
             }
 
             fn callClosure(self: *@This(), callee: *Obj.Closure, argCount: u8) !void {
@@ -384,6 +399,31 @@ pub const VM = struct {
                         @intFromEnum(OP.SET_LOCAL) => {
                             self.frame().slots[self.read_byte()] = self.peek(0);
                         },
+                        @intFromEnum(OP.GET_PROPERTY) => {
+                            if (self.peek(0).cast_if(Obj.Type.Instance)) |instance| {
+                                const field = self.read_string();
+                                const prop = instance.fields.ptr().get(field) catch {
+                                    self.runtimeError("Undefined property '{f}'", .{field});
+                                    return InterpreterError.RuntimeError;
+                                };
+                                _ = self.pop();
+                                self.push(prop);
+                            } else {
+                                self.runtimeError("Only instances have properties, found: {s}", .{self.peek(0).typeName()});
+                                return InterpreterError.RuntimeError;
+                            }
+                        },
+                        @intFromEnum(OP.SET_PROPERTY) => {
+                            if (self.peek(1).cast_if(Obj.Type.Instance)) |instance| {
+                                _ = try instance.fields.ptr().set(self.read_string(), self.peek(0));
+                                const val = self.pop();
+                                _ = self.pop();
+                                self.push(val);
+                            } else {
+                                self.runtimeError("Only instances have properties, found: {s}", .{self.peek(0).typeName()});
+                                return InterpreterError.RuntimeError;
+                            }
+                        },
                         @intFromEnum(OP.GET_GLOBAL) => {
                             const name = self.read_string();
                             const global = self.vm.globals.get(name) catch {
@@ -419,32 +459,34 @@ pub const VM = struct {
                         },
                         @intFromEnum(OP.GET_INDEX) => {
                             const key = self.pop();
-                            const obj = self.pop();
+                            const col = self.pop();
                             var pushed = false;
-                            if (obj.is(Value.obj)) {
-                                switch (obj.obj.type) {
-                                    .Function, .Native, .Closure, .Upvalue => {},
-                                    inline else => |tp| {
-                                        self.push((obj.obj.cast(tp) catch unreachable).get(key) catch Value.init({}));
+
+                            if (col.cast_if(Value.obj)) |obj| {
+                                switch (obj.type) {
+                                    inline .Table, .String, .List => |tp| {
+                                        self.push((obj.cast(tp) catch unreachable).get(key) catch Value.init({}));
                                         pushed = true;
                                     },
+                                    else => {},
                                 }
                             }
+
                             if (!pushed) {
-                                self.runtimeError("Cannot index a value of type {s}", .{obj.typeName()});
+                                self.runtimeError("Cannot index a value of type {s}", .{col.typeName()});
                                 return InterpreterError.RuntimeError;
                             }
                         },
                         @intFromEnum(OP.SET_INDEX) => {
                             const val = self.pop();
                             const key = self.pop();
-                            const obj = self.pop();
+                            const col = self.pop();
                             var pushed = false;
-                            if (obj.is(Value.obj)) {
-                                switch (obj.obj.type) {
-                                    .Function, .Native, .Closure, .Upvalue, .String => {},
-                                    inline else => |tp| {
-                                        var m = obj.obj.cast(tp) catch unreachable;
+
+                            if (col.cast_if(Value.obj)) |obj| {
+                                switch (obj.type) {
+                                    inline .Table, .List => |tp| {
+                                        var m = obj.cast(tp) catch unreachable;
                                         if (val.is(Value.nil)) {
                                             m.delete(key);
                                         } else {
@@ -452,10 +494,11 @@ pub const VM = struct {
                                         }
                                         pushed = true;
                                     },
+                                    else => {},
                                 }
                             }
                             if (!pushed) {
-                                self.runtimeError("Cannot index a value of type {s}", .{obj.typeName()});
+                                self.runtimeError("Cannot index a value of type {s}", .{col.typeName()});
                                 return InterpreterError.RuntimeError;
                             }
                             self.push(val);
