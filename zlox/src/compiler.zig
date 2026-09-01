@@ -514,7 +514,9 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn declaration(self: *Self) void {
-            if (self.match(Token.VAR)) {
+            if (self.match(Token.FUN)) {
+                self.funDeclaration();
+            } else if (self.match(Token.VAR)) {
                 self.varDeclaration();
             } else if (self.match(Token.CON)) {
                 self.conDeclaration();
@@ -523,6 +525,13 @@ pub fn Compiler(size: comptime_int) type {
             }
 
             if (self.panicMode) self.synchronize();
+        }
+
+        fn funDeclaration(self: *Self) void {
+            const global = self.parseVariable("Expect function name.", true) catch return;
+            self.markInitialized();
+            self.function(false);
+            self.defineVariable(global, true);
         }
 
         fn function(self: *Self, _: bool) void {
@@ -538,7 +547,7 @@ pub fn Compiler(size: comptime_int) type {
                 return;
             };
 
-            compiler.consume(Token.LEFT_PAREN, "Expect '(' after function name");
+            compiler.consume(Token.LEFT_PAREN, "Expect '(' in function definition");
             if (!compiler.check(Token.RIGHT_PAREN)) {
                 while (true) {
                     if (fun.arity == std.math.maxInt(@TypeOf(fun.arity))) {
@@ -669,7 +678,7 @@ pub fn Compiler(size: comptime_int) type {
             while ((self.current.type catch Token.NIL) != Token.EOF) {
                 if ((self.previous.type catch Token.NIL) == Token.SEMICOLON) return;
                 switch (self.current.type catch Token.NIL) {
-                    Token.CLASS, Token.FUN, Token.VAR, Token.IF, Token.FOR, Token.WHILE, Token.PRINT, Token.RETURN => return,
+                    Token.CLASS, Token.VAR, Token.CON, Token.IF, Token.FOR, Token.WHILE, Token.SWITCH, Token.PRINT, Token.LEFT_BRACE, Token.RETURN => return,
                     else => self.advance(),
                 }
             }
