@@ -15,7 +15,7 @@ pub fn Obj(fields: anytype) type {
         pub const Table = @import("obj::table.zig").Table(fields);
         pub const Function = @import("obj::function.zig").Function(fields);
         pub const Native = @import("obj::native.zig").Native(fields);
-        pub const Closure = @import("obj::closure.zig").Closure(fields);
+        pub const Chunk = @import("obj::chunk.zig").Chunk(fields);
         pub const Upvalue = @import("obj::upvalue.zig").Upvalue(fields);
         pub const Class = @import("obj::class.zig").Class(fields);
         pub const Instance = @import("obj::instance.zig").Instance(fields);
@@ -27,7 +27,7 @@ pub fn Obj(fields: anytype) type {
             || Function.Error //
             || Native.Error //
             || List.Error //
-            || Closure.Error //
+            || Chunk.Error //
             || Upvalue.Error //
             || Class.Error //
             || Instance.Error;
@@ -38,7 +38,7 @@ pub fn Obj(fields: anytype) type {
             Function,
             Native,
             List,
-            Closure,
+            Chunk,
             Upvalue,
             Class,
             Instance,

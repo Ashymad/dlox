@@ -97,20 +97,21 @@ pub const GC = struct {
                 }.fun);
             },
             *Obj.Function => {
-                for (obj.chunk.ptr().constants.slice()) |constant|
-                    self.mark("f", constant);
+                self.mark("f", obj.chunk.ptr());
+                if (obj.upvalues.ptr()) |upvalues|
+                    for (upvalues) |upvalue_ptr|
+                        if (upvalue_ptr) |upvalue|
+                            self.mark("c", upvalue);
+            },
+            *Obj.Chunk => {
+                for (obj.constants.ptr().slice()) |constant|
+                    self.mark("h", constant);
             },
             *Obj.List => {
                 var iter = obj.list.ptr().iter();
                 while (iter.next()) |val| {
-                    self.mark("t", val);
+                    self.mark("l", val);
                 }
-            },
-            *Obj.Closure => {
-                self.mark("c", obj.function.ptr());
-                for (obj.upvalues.ptr()) |upvalue_ptr|
-                    if (upvalue_ptr) |upvalue|
-                        self.mark("c", upvalue);
             },
             *Obj.Upvalue => {
                 if (obj.closed)
@@ -122,6 +123,14 @@ pub const GC = struct {
                     pub fn fun(s: *Self, key: Obj.Instance.Fields.Key, val: Obj.Instance.Fields.Value) void {
                         s.mark("i", key);
                         s.mark("i", val);
+                    }
+                }.fun);
+            },
+            *Obj.Class => {
+                obj.methods.ptr().for_each(self, struct {
+                    pub fn fun(s: *Self, key: Obj.Class.Methods.Key, val: Obj.Class.Methods.Value) void {
+                        s.mark("k", key);
+                        s.mark("k", val);
                     }
                 }.fun);
             },

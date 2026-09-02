@@ -15,7 +15,13 @@ pub fn main(init: std.process.Init) anyerror!u8 {
         if (std.mem.eql(u8, args[1], "-d")) {
             try repl(allocator, io, true);
         } else {
-            try runFile(allocator, io, args[1]);
+            try runFile(allocator, io, args[1], false);
+        }
+    } else if (args.len == 3) {
+        if (std.mem.eql(u8, args[1], "-d")) {
+            try runFile(allocator, io, args[2], true);
+        } else {
+            try runFile(allocator, io, args[1], true);
         }
     } else {
         std.debug.print("Usage: {s} [path]\n", .{args[0]});
@@ -25,13 +31,13 @@ pub fn main(init: std.process.Init) anyerror!u8 {
     return 0;
 }
 
-pub fn runFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) anyerror!void {
+pub fn runFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8, dbg: bool) anyerror!void {
     const text = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, std.Io.Limit.unlimited);
     defer allocator.free(text);
     var VM = try vm.VM.init(allocator, io);
     defer VM.deinit();
 
-    try VM.interpret(text, false);
+    try VM.interpret(text, dbg);
 }
 
 pub fn repl(allocator: std.mem.Allocator, io: std.Io, dbg: bool) anyerror!void {

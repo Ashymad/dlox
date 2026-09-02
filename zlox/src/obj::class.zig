@@ -6,6 +6,7 @@ const hash = @import("hash.zig");
 
 const Packed = @import("lib::packed.zig").Packed;
 const Obj = @import("obj.zig").Obj;
+const Value = @import("value.zig").Value;
 
 pub fn Class(fields: anytype) type {
     const Super = Obj(fields);
@@ -16,7 +17,7 @@ pub fn Class(fields: anytype) type {
         pub const Arg = void;
         pub const Error = error{OutOfMemory};
 
-        pub const Methods = table.Table(*Super.String, *Super.Closure, hash.hash_t(*Super.String), Super.String.eql);
+        pub const Methods = table.Table(*Super.String, *Super.Function, hash.hash_t(*Super.String), Super.String.eql);
 
         obj: Super,
         methods: Packed(*Methods),

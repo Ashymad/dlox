@@ -35,7 +35,11 @@ pub fn Packed(Type: type) type {
         }
 
         pub fn alloc(allocator: std.mem.Allocator, count: usize) !Self {
-            return if (slice)
+            return if (count == 0 and optional)
+                Self.init(null)
+            else if (count == 0)
+                @panic("Unable to create a non-optional 0 size pointer")
+            else if (slice)
                 Self.init(try allocator.alloc(Child, count))
             else if (many)
                 Self.init((try allocator.alloc(Child, count)).ptr)
@@ -47,9 +51,17 @@ pub fn Packed(Type: type) type {
 
         pub fn alloc2(allocator: std.mem.Allocator, count: usize, val: Child) !Self {
             const self = try Self.alloc(allocator, count);
-            const p = self.ptr();
-            for (0..count) |i|
+            var p = if (optional)
+                if (self.ptr()) |p|
+                    p
+                else
+                    return self
+            else
+                self.ptr();
+
+            for (0..count) |i| {
                 p[i] = val;
+            }
             return self;
         }
 
@@ -92,11 +104,14 @@ pub fn Packed(Type: type) type {
                 @as(Ptr, @ptrFromInt(self._ptr)).*;
         }
 
-        pub fn at(self: Self, idx: usize) if (optional) ?Child else Child {
+        pub fn at(self: Self, idx: usize) if (optional and !utils.is_type(Child, "optional")) ?Child else Child {
             return if (!slice and !many)
                 @compileError("Cannot call at() on a single-item pointer")
-            else if (optional and self._ptr == 0)
-                null
+            else if (optional)
+                if (self.ptr()) |val|
+                    val[idx]
+                else
+                    null
             else
                 self.ptr()[idx];
         }

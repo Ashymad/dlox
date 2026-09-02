@@ -46,6 +46,7 @@ pub fn Instance(fields: anytype) type {
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {
+            self.fields.ptr().deinit();
             self.fields.destroy(allocator);
             allocator.destroy(self);
         }

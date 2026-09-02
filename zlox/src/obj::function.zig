@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const utils = @import("lib::utils.zig");
-const chunk = @import("chunk.zig");
 
 const Packed = @import("lib::packed.zig").Packed;
 const Obj = @import("obj.zig").Obj;
@@ -12,25 +11,37 @@ pub fn Function(fields: anytype) type {
     return packed struct {
         const Self = @This();
 
-        pub const Arg = Type;
-        pub const Error = error{OutOfMemory};
+        pub const Error = error{ OutOfMemory, InvalidArguments };
 
-        pub const Type = enum(u8) { Function, Script };
+        pub const Type = enum(u8) { Function, Script, Closure, Method };
+
+        pub const Chunk = *Super.Chunk;
+        pub const Upvalue = ?*Super.Upvalue;
+
+        pub const Arg = struct {
+            type: Type = .Function,
+            upvalues: u8 = 0,
+            chunk: Chunk,
+            arity: u8 = 0,
+        };
 
         obj: Super,
         arity: u8,
-        chunk: Packed(*chunk.Chunk),
+        chunk: Packed(*Super.Chunk),
         type: Type,
-        upvalue_count: u8,
+        upvalues: Packed(?[]Upvalue),
 
-        pub fn init(tpe: Arg, allocator: std.mem.Allocator) Error!*Self {
+        pub fn init(arg: Arg, allocator: std.mem.Allocator) Error!*Self {
+            if (if (arg.type == .Closure) arg.upvalues == 0 else arg.upvalues > 0)
+                return Error.InvalidArguments;
+
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
-                .chunk = try Packed(*chunk.Chunk).create2(allocator, try chunk.Chunk.init(allocator)),
-                .arity = 0,
-                .type = tpe,
-                .upvalue_count = 0,
+                .chunk = Packed(Chunk).init(arg.chunk),
+                .arity = arg.arity,
+                .type = arg.type,
+                .upvalues = try Packed(?[]Upvalue).alloc2(allocator, arg.upvalues, null),
             };
             return self;
         }
@@ -43,6 +54,8 @@ pub fn Function(fields: anytype) type {
             switch (self.type) {
                 .Function => _ = try writer.write("<Function>"),
                 .Script => _ = try writer.write("<Script>"),
+                .Closure => _ = try writer.write("<Closure>"),
+                .Method => _ = try writer.write("<Method>"),
             }
         }
 
@@ -51,8 +64,7 @@ pub fn Function(fields: anytype) type {
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {
-            self.chunk.ptr().deinit();
-            self.chunk.destroy(allocator);
+            self.upvalues.destroy(allocator);
             allocator.destroy(self);
         }
     };

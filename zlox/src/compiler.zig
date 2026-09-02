@@ -4,16 +4,15 @@ const vm_native = @import("vm::native.zig");
 const utils = @import("lib::utils.zig");
 const scanner = @import("scanner.zig");
 const debug = @import("debug.zig");
-const chunk = @import("chunk.zig");
 const value = @import("value.zig");
 
 const Token = scanner.TokenType;
-const Chunk = chunk.Chunk;
-const OP = chunk.OP;
+const OP = @import("op.zig").OP;
 const Value = value.Value;
 const ValueArray = value.ValueArray;
 const GC = @import("gc.zig").GC;
 const Obj = GC.Obj;
+const Chunk = Obj.Chunk;
 
 pub const CompilerError = Obj.Error || scanner.ScannerError || Chunk.Error || Value.ParseNumberError || error{ UnexpectedToken, NotAnExpression };
 
@@ -48,13 +47,14 @@ pub fn Compiler(size: comptime_int) type {
         lastError: CompilerError,
         hadError: bool,
         panicMode: bool,
-        currentFunction: *Obj.Function,
+        chunk: *Obj.Chunk,
         objects: *GC,
         locals: [size]Local,
         localCount: usize,
         scopeDepth: usize,
         enclosing: ?*Self,
         upvalues: [upvalues_size]Upvalue,
+        upvaluesCount: u8,
 
         const Self = @This();
 
@@ -144,19 +144,15 @@ pub fn Compiler(size: comptime_int) type {
             }
         }
 
-        fn currentChunk(self: *Self) *Chunk {
-            return self.currentFunction.chunk.ptr();
-        }
-
         fn emitByte(self: *Self, byte: u8) void {
-            self.currentChunk().write(byte, self.previous.line) catch |err| {
+            self.chunk.write(byte, self.previous.line) catch |err| {
                 self.lastError = err;
                 self.errorAtCurrent("Out of Memory");
             };
         }
 
         fn emitOP(self: *Self, op: OP) void {
-            self.currentChunk().writeOP(op, self.previous.line) catch |err| {
+            self.chunk.writeOP(op, self.previous.line) catch |err| {
                 self.lastError = err;
                 self.errorAtCurrent("Out of Memory");
             };
@@ -172,15 +168,15 @@ pub fn Compiler(size: comptime_int) type {
             self.emitOP(op2);
         }
 
-        fn end(self: *Self) *Obj.Function {
+        fn end(self: *Self) !*Obj.Chunk {
             self.emitReturn();
-            return self.currentFunction;
+            return self.chunk;
         }
 
         fn emitReturn(self: *Self) void {
-            if (self.currentFunction.type != Obj.Function.Type.Script) {
+            if (self.enclosing) |_|
                 self.emitOP(OP.NIL);
-            }
+
             self.emitOP(OP.RETURN);
         }
 
@@ -314,7 +310,7 @@ pub fn Compiler(size: comptime_int) type {
 
         fn listTable(self: *Self, _: bool) void {
             self.emit(OP.CONSTANT, 0xff);
-            const offset = self.currentChunk().code.len - 1;
+            const offset = self.chunk.code.ptr().len - 1;
             var argCount: u8 = 0;
             var isList = true;
 
@@ -342,12 +338,12 @@ pub fn Compiler(size: comptime_int) type {
                 }
             }
             if (isList) {
-                self.currentChunk().code.set(offset, self.makeObj(.Native, Obj.Native.Arg{
+                self.chunk.code.ptr().set(offset, self.makeObj(.Native, .{
                     .fun = vm_native.list,
                     .type = .Literal,
                 }) catch return) catch return;
             } else {
-                self.currentChunk().code.set(offset, self.makeObj(.Native, Obj.Native.Arg{
+                self.chunk.code.ptr().set(offset, self.makeObj(.Native, .{
                     .fun = vm_native.table,
                     .type = .Literal,
                 }) catch return) catch return;
@@ -403,7 +399,7 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn addUpvalue(self: *Self, idx: u8, isLocal: bool) !u8 {
-            const count = self.currentFunction.upvalue_count;
+            const count = self.upvaluesCount;
 
             for (self.upvalues[0..count], 0..) |upvalue, i| {
                 if (upvalue.index == idx and upvalue.isLocal == isLocal) {
@@ -418,7 +414,7 @@ pub fn Compiler(size: comptime_int) type {
             }
 
             self.upvalues[count] = .{ .index = idx, .isLocal = isLocal };
-            self.currentFunction.upvalue_count += 1;
+            self.upvaluesCount += 1;
             return count;
         }
 
@@ -441,7 +437,7 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn makeConstant(self: *Self, val: Value) u8 {
-            return self.currentChunk().addConstant(val) catch |err| {
+            return self.chunk.addConstant(val) catch |err| {
                 self.lastError = err;
                 self.errorAtPrevious("Too many constants in one chunk");
                 return 0;
@@ -551,16 +547,24 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn class(self: *Self, _: bool) void {
-            self.consume(Token.LEFT_BRACE, "Expect '{' before class body");
-            self.consume(Token.RIGHT_BRACE, "Expect '}' after class body");
-
             const cls = self.objects.emplace_cast(Obj.Type.Class, {}) catch |err| {
                 self.errorAtPrevious("Couldn't allocate class");
                 self.lastError = err;
                 return;
             };
-
             self.emit(OP.CONSTANT, self.makeConstant(Value.init(cls)));
+            self.consume(Token.LEFT_BRACE, "Expect '{' before class body");
+            while (!self.check(Token.RIGHT_BRACE) and !self.check(Token.EOF)) {
+                self.method();
+            }
+            self.consume(Token.RIGHT_BRACE, "Expect '}' after class body");
+        }
+
+        fn method(self: *Self) void {
+            self.consume(Token.IDENTIFIER, "Expect method name");
+            const constant = self.identifierConstant(self.previous) catch return;
+            self.function(false);
+            self.emit(OP.METHOD, constant);
         }
 
         fn funDeclaration(self: *Self) void {
@@ -571,26 +575,31 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn function(self: *Self, _: bool) void {
-            var fun = self.objects.emplace(Obj.Type.Function, .Function) catch |err| {
-                self.errorAtPrevious("Couldn't allocate function");
+            const chunk = self.objects.emplace(.Chunk, {}) catch |err| {
+                self.errorAtPrevious("Couldn't allocate chunk");
                 self.lastError = err;
                 return;
             };
 
-            var compiler = Self.init_enclosed(self, fun) catch |err| {
+            var compiler = Self.init_enclosed(self, chunk) catch |err| {
                 self.errorAtPrevious("Couldn't init enclosed function");
                 self.lastError = err;
                 return;
             };
 
+            compiler.objects.push_callback(&gc_callback, &compiler) catch @panic("Couln't push callback");
+            defer compiler.objects.pop_callback();
+
+            var arity: u8 = 0;
+
             compiler.consume(Token.LEFT_PAREN, "Expect '(' in function definition");
             if (!compiler.check(Token.RIGHT_PAREN)) {
                 while (true) {
-                    if (fun.arity == std.math.maxInt(@TypeOf(fun.arity))) {
+                    if (arity == std.math.maxInt(@TypeOf(arity))) {
                         self.errorAtCurrent("Too many arguments to a function");
                         return;
                     }
-                    fun.arity += 1;
+                    arity += 1;
                     compiler.defineVariable(compiler.parseVariable("Expect parameter name.", true) catch return, true);
                     if (!compiler.match(Token.COMMA)) break;
                 }
@@ -604,14 +613,25 @@ pub fn Compiler(size: comptime_int) type {
 
             if (compiler.hadError) {
                 self.lastError = compiler.lastError;
-            } else if (compiler.currentFunction.upvalue_count == 0) {
-                self.emit(OP.CONSTANT, self.makeConstant(Value.init(compiler.end().cast())));
             } else {
-                self.emit(OP.CLOSURE, self.makeConstant(Value.init(compiler.end().cast())));
+                const fun = self.objects.emplace(.Function, .{
+                    .type = .Function,
+                    .chunk = compiler.end() catch return,
+                    .arity = arity,
+                }) catch |err| {
+                    self.errorAtPrevious("Couldn't allocate function");
+                    self.lastError = err;
+                    return;
+                };
+                self.emit(OP.CONSTANT, self.makeConstant(Value.init(fun.cast())));
 
-                for (compiler.upvalues[0..compiler.currentFunction.upvalue_count]) |upvalue| {
-                    self.emitByte(if (upvalue.isLocal) 1 else 0);
-                    self.emitByte(upvalue.index);
+                if (compiler.upvaluesCount != 0) {
+                    self.emit(OP.CLOSURE, compiler.upvaluesCount);
+
+                    for (compiler.upvalues[0..compiler.upvaluesCount]) |upvalue| {
+                        self.emitByte(if (upvalue.isLocal) 1 else 0);
+                        self.emitByte(upvalue.index);
+                    }
                 }
             }
         }
@@ -743,7 +763,7 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn returnStatement(self: *Self) void {
-            if (self.currentFunction.type == Obj.Function.Type.Script) {
+            if (self.enclosing == null) {
                 self.errorAtPrevious("Can't return from top-level code");
                 return;
             }
@@ -768,7 +788,7 @@ pub fn Compiler(size: comptime_int) type {
             }) catch return;
 
             var jumpOver = self.emitJump(OP.JUMP);
-            const switchExpression = self.currentChunk().code.len;
+            const switchExpression = self.chunk.code.ptr().len;
             self.expression();
 
             self.consume(Token.RIGHT_PAREN, "Expect ')' after expression");
@@ -776,7 +796,7 @@ pub fn Compiler(size: comptime_int) type {
             self.emitOP(OP.GET_INDEX);
             const defaultJump = self.emitJump(OP.JUMP_IF_FALSE);
             self.emitOP(OP.JUMP_POP);
-            const switchJump = self.currentChunk().code.len;
+            const switchJump = self.chunk.code.ptr().len;
             const exitJump = self.emitJump(OP.JUMP);
 
             self.patchJump(jumpOver);
@@ -787,7 +807,7 @@ pub fn Compiler(size: comptime_int) type {
                 if (self.match(Token.CASE)) {
                     self.expression();
                     argCount += 2;
-                    const distance = self.currentChunk().code.len - switchJump + 5;
+                    const distance = self.chunk.code.ptr().len - switchJump + 5;
                     if (distance > std.math.maxInt(u52)) {
                         self.errorAtCurrent("Switch body too large");
                         return;
@@ -825,7 +845,7 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn whileStatement(self: *Self) void {
-            const loopStart = self.currentChunk().code.len;
+            const loopStart = self.chunk.code.ptr().len;
 
             self.consume(Token.LEFT_PAREN, "Expect '(' after 'while'.");
             self.expression();
@@ -856,7 +876,7 @@ pub fn Compiler(size: comptime_int) type {
                 self.expressionStatement();
             }
 
-            var loopStart = self.currentChunk().code.len;
+            var loopStart = self.chunk.code.ptr().len;
 
             var exitJump: ?usize = null;
             if (!self.match(Token.SEMICOLON)) {
@@ -869,7 +889,7 @@ pub fn Compiler(size: comptime_int) type {
 
             if (!self.match(Token.RIGHT_PAREN)) {
                 const bodyJump = self.emitJump(OP.JUMP);
-                const incrementStart = self.currentChunk().code.len;
+                const incrementStart = self.chunk.code.ptr().len;
                 self.expression();
                 self.emitOP(OP.POP);
                 self.consume(Token.RIGHT_PAREN, "Expect ')' after increment clause");
@@ -892,7 +912,7 @@ pub fn Compiler(size: comptime_int) type {
 
         fn emitLoop(self: *Self, start: usize) void {
             self.emitOP(OP.LOOP);
-            const offset = self.currentChunk().code.len - start + 2;
+            const offset = self.chunk.code.ptr().len - start + 2;
 
             if (offset > std.math.maxInt(u16)) {
                 self.errorAtPrevious("Loop body too large");
@@ -922,20 +942,20 @@ pub fn Compiler(size: comptime_int) type {
             self.emitOP(instruction);
             self.emitByte(0xff);
             self.emitByte(0xff);
-            return self.currentChunk().code.len - 2;
+            return self.chunk.code.ptr().len - 2;
         }
 
         fn patchJump(self: *Self, offset: usize) void {
-            const jump = self.currentChunk().code.len - offset - 2;
+            const jump = self.chunk.code.ptr().len - offset - 2;
             if (jump > std.math.maxInt(u16)) {
                 self.errorAtPrevious("Jump too large");
                 return;
             }
 
-            self.currentChunk().code.set(offset, @intCast((jump >> 8) & 0xff)) catch {
+            self.chunk.code.ptr().set(offset, @intCast((jump >> 8) & 0xff)) catch {
                 self.errorAtPrevious("Invalid jump offset");
             };
-            self.currentChunk().code.set(offset + 1, @intCast(jump & 0xff)) catch {
+            self.chunk.code.ptr().set(offset + 1, @intCast(jump & 0xff)) catch {
                 self.errorAtPrevious("Invalid jump offset");
             };
         }
@@ -992,7 +1012,7 @@ pub fn Compiler(size: comptime_int) type {
             self.emitOP(OP.PRINT);
         }
 
-        fn init(scan: *scanner.Scanner, objects: *GC, fun: *Obj.Function) Self {
+        fn init(scan: *scanner.Scanner, objects: *GC, chunk: *Obj.Chunk) !Self {
             var self = Self{
                 .scanner = scan,
                 .current = scanner.Token.Empty,
@@ -1000,41 +1020,39 @@ pub fn Compiler(size: comptime_int) type {
                 .panicMode = false,
                 .hadError = false,
                 .lastError = scanner.ScannerError.EmptyToken,
-                .currentFunction = fun,
+                .chunk = chunk,
                 .objects = objects,
                 .locals = @splat(Local{}),
                 .localCount = 1,
                 .scopeDepth = 0,
                 .enclosing = null,
                 .upvalues = @splat(Upvalue{ .index = 0, .isLocal = false }),
+                .upvaluesCount = 0,
             };
             self.locals[0].depth = 0;
+
             return self;
         }
 
-        fn init_enclosed(enclosing: *Self, fun: *Obj.Function) !Self {
-            var enclosed = Self.init(enclosing.scanner, enclosing.objects, fun);
+        fn init_enclosed(enclosing: *Self, chunk: *Obj.Chunk) !Self {
+            var enclosed = try Self.init(enclosing.scanner, enclosing.objects, chunk);
             enclosed.current = enclosing.current;
             enclosed.enclosing = enclosing;
             enclosed.beginScope();
 
-            try enclosing.objects.swap_callback(&gc_callback, &enclosed);
             return enclosed;
         }
 
         fn gc_callback(self_ptr: *anyopaque) void {
             var self: *@This() = @ptrCast(@alignCast(self_ptr));
 
-            self.objects.mark("C", self.currentFunction);
-            while (self.enclosing) |enclosed| : (self = enclosed) {
-                self.objects.mark("C", enclosed.currentFunction);
-            }
+            self.objects.mark("C", self.chunk);
         }
 
-        pub fn compile(source: []const u8, objects: *GC) CompilerError!*Obj.Function {
+        pub fn compile(source: []const u8, objects: *GC) CompilerError!*Obj.Chunk {
             var scan = try scanner.Scanner.init(source);
-            const fun = try objects.emplace(Obj.Type.Function, .Script);
-            var self = Self.init(&scan, objects, fun);
+            const chunk = try objects.emplace(.Chunk, {});
+            var self = try Self.init(&scan, objects, chunk);
 
             try objects.push_callback(&gc_callback, &self);
             defer objects.pop_callback();
@@ -1045,7 +1063,7 @@ pub fn Compiler(size: comptime_int) type {
                 self.declaration();
             }
 
-            return if (self.hadError) self.lastError else self.end();
+            return if (self.hadError) self.lastError else try self.end();
         }
     };
 }

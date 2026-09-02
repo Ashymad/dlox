@@ -8,13 +8,12 @@ const native = @import("vm::native.zig");
 const debug = @import("debug.zig");
 const compiler = @import("compiler.zig");
 const hash = @import("hash.zig");
-const chunk = @import("chunk.zig");
 
-const Chunk = chunk.Chunk;
-const OP = chunk.OP;
+const OP = @import("op.zig").OP;
 const Value = @import("value.zig").Value;
 const GC = @import("gc.zig").GC;
 const Obj = GC.Obj;
+const Chunk = Obj.Chunk;
 
 const InterpreterError = Obj.Error || compiler.CompilerError || callbacks.Error || error{ CompileError, RuntimeError, StackOverflow, IndexOutOfBounds, Overflow, DivisionByZero };
 
@@ -51,16 +50,17 @@ pub const VM = struct {
     const Globals = table.Table(*Obj.String, Global, hash.hash_t(*Obj.String), Obj.String.eql);
 
     const CallFrame = struct {
-        callee: *Obj,
+        callee: *Obj.Function,
         ip: [*]const u8,
         slots: [*]Value,
         chunk: *const Chunk,
 
-        pub fn init(comptime tp: Obj.Type, callee: *tp.get(), slots: [*]Value) @This() {
-            return switch (tp) {
-                .Function => @This(){ .callee = callee.cast(), .ip = callee.chunk.ptr().code.data.ptr, .chunk = callee.chunk.ptr(), .slots = slots },
-                .Closure => @This(){ .callee = callee.cast(), .ip = callee.function.ptr().chunk.ptr().code.data.ptr, .chunk = callee.function.ptr().chunk.ptr(), .slots = slots },
-                else => @compileError("Invalid type"),
+        pub fn init(callee: *Obj.Function, slots: [*]Value) @This() {
+            return @This(){
+                .callee = callee,
+                .ip = callee.chunk.ptr().code.ptr().data.ptr,
+                .chunk = callee.chunk.ptr(),
+                .slots = slots,
             };
         }
     };
@@ -116,11 +116,11 @@ pub const VM = struct {
         try self.objects.push_callback(&VM.gc_callback, self);
         defer self.objects.pop_callback();
 
-        const function = try compiler.Compiler(stack_size).compile(source, &self.objects);
+        const chunk = try compiler.Compiler(stack_size).compile(source, &self.objects);
 
-        if (dbg) try debug.disassembleChunk(function.chunk.ptr());
+        if (dbg) try debug.disassembleChunk(chunk);
 
-        try Interpreter(callstack_size, stack_size).run(self, function, dbg);
+        try Interpreter(callstack_size, stack_size).run(self, chunk, dbg);
     }
 
     fn Interpreter(callstack_size: comptime_int, stack_size: comptime_int) type {
@@ -135,24 +135,29 @@ pub const VM = struct {
             vm: *VM,
             open_upvalues: List,
 
-            pub fn run(vm: *VM, function: *Obj.Function, dbg: bool) InterpreterError!void {
+            pub fn run(vm: *VM, chunk: *Obj.Chunk, dbg: bool) InterpreterError!void {
                 var self = @This(){
                     .frames = @splat(undefined),
-                    .frameCount = 1,
+                    .frameCount = 0,
                     .stack = @splat(Value.init({})),
                     .stackTop = undefined,
                     .vm = vm,
                     .open_upvalues = List.init(vm.allocator),
                 };
+                self.stackTop = &self.stack;
 
                 try vm.objects.push_callback(&Self.gc_callback, &self);
                 defer vm.objects.pop_callback();
 
                 defer self.open_upvalues.free();
 
-                self.stackTop = &self.stack;
-                self.frames[0] = CallFrame.init(.Function, function, self.stackTop);
+                self.push(Value.init(chunk.cast()));
+
+                const function = try vm.objects.emplace(.Function, .{ .type = .Script, .chunk = chunk });
+                _ = self.pop();
                 self.push(Value.init(function.cast()));
+
+                try self.callFunction(function, 0);
                 try self.execute(dbg);
             }
 
@@ -204,7 +209,7 @@ pub const VM = struct {
             }
 
             fn read_constant(self: *@This()) Value {
-                return self.frame().chunk.constants.get(self.read_byte()) catch unreachable;
+                return self.frame().chunk.constants.ptr().get(self.read_byte()) catch unreachable;
             }
 
             fn read_string(self: *@This()) *Obj.String {
@@ -232,8 +237,6 @@ pub const VM = struct {
             fn callValue(self: *@This(), callee: Value, argCount: u8) !void {
                 if (callee.cast_if(Obj.Type.Function)) |fun| {
                     try self.callFunction(fun, argCount);
-                } else if (callee.cast_if(Obj.Type.Closure)) |clo| {
-                    try self.callClosure(clo, argCount);
                 } else if (callee.cast_if(Obj.Type.Native)) |nat| {
                     try self.callNative(nat, argCount);
                 } else if (callee.cast_if(Obj.Type.Class)) |cls| {
@@ -253,17 +256,6 @@ pub const VM = struct {
                 self.pook(argCount, Value.init(try self.vm.objects.emplace_cast(.Instance, callee)));
             }
 
-            fn callClosure(self: *@This(), callee: *Obj.Closure, argCount: u8) !void {
-                if (argCount != callee.function.ptr().arity) {
-                    self.runtimeError("Expected {d} arguments but got {d}", .{ callee.function.ptr().arity, argCount });
-                    return InterpreterError.RuntimeError;
-                }
-                if (self.frameCount == callstack_size - 1)
-                    return InterpreterError.StackOverflow;
-                self.frameCount += 1;
-                self.frames[self.frameCount - 1] = CallFrame.init(.Closure, callee, self.stackTop - argCount - 1);
-            }
-
             fn callFunction(self: *@This(), callee: *Obj.Function, argCount: u8) !void {
                 if (argCount != callee.arity) {
                     self.runtimeError("Expected {d} arguments but got {d}", .{ callee.arity, argCount });
@@ -272,7 +264,7 @@ pub const VM = struct {
                 if (self.frameCount == callstack_size - 1)
                     return InterpreterError.StackOverflow;
                 self.frameCount += 1;
-                self.frames[self.frameCount - 1] = CallFrame.init(.Function, callee, self.stackTop - argCount - 1);
+                self.frames[self.frameCount - 1] = CallFrame.init(callee, self.stackTop - argCount - 1);
             }
 
             fn callNative(self: *@This(), obj: *Obj.Native, argCount: u8) !void {
@@ -328,7 +320,7 @@ pub const VM = struct {
             }
 
             fn instruction_idx(self: *const @This()) usize {
-                return @intFromPtr(self.ip()) - @intFromPtr(self.frame().chunk.code.data.ptr);
+                return @intFromPtr(self.ip()) - @intFromPtr(self.frame().chunk.code.ptr().data.ptr);
             }
 
             fn current_slot(self: *const @This()) u8 {
@@ -444,12 +436,12 @@ pub const VM = struct {
                             }
                         },
                         @intFromEnum(OP.GET_UPVALUE) => {
-                            const closure = try self.frame().callee.cast(.Closure);
+                            const closure = self.frame().callee;
                             const index = self.read_byte();
                             self.push(closure.upvalues.at(index).?.location.ptr().*);
                         },
                         @intFromEnum(OP.SET_UPVALUE) => {
-                            const closure = try self.frame().callee.cast(.Closure);
+                            const closure = self.frame().callee;
                             const index = self.read_byte();
                             closure.upvalues.at(index).?.location.ptr().* = self.peek(0);
                         },
@@ -508,19 +500,31 @@ pub const VM = struct {
                             try self.callValue(self.peek(argCount), argCount);
                         },
                         @intFromEnum(OP.CLOSURE) => {
-                            const function = try self.read_constant().obj.cast(.Function);
-                            const closure = try self.vm.objects.emplace(.Closure, function);
-                            for (closure.upvalues.ptr()) |*upvalue| {
+                            const count = self.read_byte();
+                            const function = try self.pop().obj.cast(.Function);
+                            const closure = try self.vm.objects.emplace(.Function, .{
+                                .type = .Closure,
+                                .chunk = function.chunk.ptr(),
+                                .arity = function.arity,
+                                .upvalues = count,
+                            });
+                            self.push(Value.init(closure.cast()));
+
+                            for (closure.upvalues.ptr().?) |*upvalue| {
                                 const isLocal = self.read_byte();
                                 const slot = self.read_byte();
                                 if (isLocal == 1) {
                                     upvalue.* = try self.captureUpvalue(slot);
                                 } else {
-                                    const callee = try self.frame().callee.cast(.Closure);
-                                    upvalue.* = callee.upvalues.at(slot);
+                                    upvalue.* = self.frame().callee.upvalues.at(slot);
                                 }
                             }
-                            self.push(Value.init(closure.cast()));
+                        },
+                        @intFromEnum(OP.METHOD) => {
+                            const name = self.read_string();
+                            const method = try self.pop().obj.cast(.Function);
+                            const class = try self.peek(0).obj.cast(.Class);
+                            _ = try class.methods.ptr().set(name, method);
                         },
                         @intFromEnum(OP.DEFINE_GLOBAL) => _ = try self.vm.globals.set(self.read_string(), Global.make_var(self.pop())),
                         @intFromEnum(OP.DEFINE_GLOBAL_CONSTANT) => _ = try self.vm.globals.set(self.read_string(), Global.make_con(self.pop())),
@@ -543,8 +547,8 @@ pub const VM = struct {
                 var i = self.frameCount - 1;
                 while (true) : (i -= 1) {
                     const fram = self.frames[i];
-                    const idx = @intFromPtr(fram.ip) - @intFromPtr(fram.chunk.code.data.ptr);
-                    std.debug.print("[line {d}] in {f}\n", .{ fram.chunk.lines.get(idx) catch 1, fram.callee });
+                    const idx = @intFromPtr(fram.ip) - @intFromPtr(fram.chunk.code.ptr().data.ptr);
+                    std.debug.print("[line {d}] in {f}\n", .{ fram.chunk.lines.ptr().get(idx) catch 1, fram.callee });
                     if (i == 0) break;
                 }
                 std.debug.print(fmt ++ "\n", args);
