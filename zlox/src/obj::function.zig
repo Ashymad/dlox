@@ -27,12 +27,11 @@ pub fn Function(fields: anytype) type {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
-                .chunk = try Packed(*chunk.Chunk).create(allocator),
+                .chunk = try Packed(*chunk.Chunk).create2(allocator, try chunk.Chunk.init(allocator)),
                 .arity = 0,
                 .type = tpe,
                 .upvalue_count = 0,
             };
-            self.chunk.set(try chunk.Chunk.init(allocator));
             return self;
         }
 

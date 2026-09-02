@@ -28,6 +28,12 @@ pub fn Packed(Type: type) type {
                 Self.init(try allocator.create(Child));
         }
 
+        pub fn create2(allocator: std.mem.Allocator, val: Child) !Self {
+            const self = try Self.create(allocator);
+            self.set(val);
+            return self;
+        }
+
         pub fn alloc(allocator: std.mem.Allocator, count: usize) !Self {
             return if (slice)
                 Self.init(try allocator.alloc(Child, count))
@@ -37,6 +43,14 @@ pub fn Packed(Type: type) type {
                 Self.create(allocator)
             else
                 @panic("Cannot alloc() a single-item pointer with a count of more than one");
+        }
+
+        pub fn alloc2(allocator: std.mem.Allocator, count: usize, val: Child) !Self {
+            const self = try Self.alloc(allocator, count);
+            const p = self.ptr();
+            for (0..count) |i|
+                p[i] = val;
+            return self;
         }
 
         pub fn init(arg: Type) Self {
@@ -118,7 +132,7 @@ pub fn Packed(Type: type) type {
             }
         }
 
-        pub fn set(self: Self, val: if (many or slice) utils.mod_ptr_t(Ptr, "const", true) else Child) void {
+        pub fn set(self: Self, val: if (many or slice) utils.mod_ptr_t(ptr, "const", true) else Child) void {
             if (many or slice)
                 @memcpy(self.ptr(), val)
             else

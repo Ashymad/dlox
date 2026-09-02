@@ -24,9 +24,8 @@ pub fn Table(fields: anytype) type {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
-                .table = try Packed(*Self.Table).create(allocator),
+                .table = try Packed(*Self.Table).create2(allocator, Self.Table.init(allocator)),
             };
-            self.table.set(Self.Table.init(allocator));
             return self;
         }
 

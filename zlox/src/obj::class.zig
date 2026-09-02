@@ -1,7 +1,10 @@
 const std = @import("std");
 
 const utils = @import("lib::utils.zig");
+const table = @import("lib::table.zig");
+const hash = @import("hash.zig");
 
+const Packed = @import("lib::packed.zig").Packed;
 const Obj = @import("obj.zig").Obj;
 
 pub fn Class(fields: anytype) type {
@@ -13,12 +16,16 @@ pub fn Class(fields: anytype) type {
         pub const Arg = void;
         pub const Error = error{OutOfMemory};
 
+        pub const Methods = table.Table(*Super.String, *Super.Closure, hash.hash_t(*Super.String), Super.String.eql);
+
         obj: Super,
+        methods: Packed(*Methods),
 
         pub fn init(_: Arg, allocator: std.mem.Allocator) Error!*Self {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
+                .methods = try Packed(*Methods).create2(allocator, Methods.init(allocator)),
             };
             return self;
         }
@@ -36,6 +43,8 @@ pub fn Class(fields: anytype) type {
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {
+            self.methods.ptr().deinit();
+            self.methods.destroy(allocator);
             allocator.destroy(self);
         }
     };

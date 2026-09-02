@@ -22,16 +22,19 @@ pub fn Upvalue(fields: anytype) type {
 
         pub fn init(arg: Arg, allocator: std.mem.Allocator) Error!*Self {
             const self: *Self = try allocator.create(Self);
-            self.* = Self{ .obj = Super.make(Self), .location = Packed(*Value).init(arg.val), .closed = false, .slot = arg.slot };
+            self.* = Self{
+                .obj = Super.make(Self),
+                .location = Packed(*Value).init(arg.val),
+                .closed = false,
+                .slot = arg.slot,
+            };
             return self;
         }
 
         pub fn close(self: *Self, allocator: std.mem.Allocator) Error!void {
             if (!self.closed) {
                 const old = self.location.get();
-
-                self.location = try Packed(*Value).create(allocator);
-                self.location.set(old);
+                self.location = try Packed(*Value).create2(allocator, old);
                 self.closed = true;
             }
         }

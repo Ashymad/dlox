@@ -28,9 +28,8 @@ pub fn Instance(fields: anytype) type {
             self.* = Self{
                 .obj = Super.make(Self),
                 .cls = Packed(*Super.Class).init(cls),
-                .fields = try Packed(*Self.Fields).create(allocator),
+                .fields = try Packed(*Self.Fields).create2(allocator, Fields.init(allocator)),
             };
-            self.fields.set(Self.Fields.init(allocator));
             return self;
         }
 
@@ -47,7 +46,6 @@ pub fn Instance(fields: anytype) type {
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {
-            self.fields.ptr().deinit();
             self.fields.destroy(allocator);
             allocator.destroy(self);
         }

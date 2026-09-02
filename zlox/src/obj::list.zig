@@ -24,9 +24,8 @@ pub fn List(fields: anytype) type {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
-                .list = try Packed(*Self.List).create(allocator),
+                .list = try Packed(*Self.List).create2(allocator, Self.List.init(allocator)),
             };
-            self.list.set(Self.List.init(allocator));
             return self;
         }
 

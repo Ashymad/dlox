@@ -22,10 +22,9 @@ pub fn Closure(fields: anytype) type {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
-                .upvalues = try Packed([]?*Super.Upvalue).alloc(allocator, arg.upvalue_count),
+                .upvalues = try Packed([]?*Super.Upvalue).alloc2(allocator, arg.upvalue_count, null),
                 .function = Packed(*Super.Function).init(arg),
             };
-            for (self.upvalues.ptr()) |*upvalue| upvalue.* = null;
             return self;
         }
 
