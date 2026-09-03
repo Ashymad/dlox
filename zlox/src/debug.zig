@@ -5,6 +5,7 @@ const value = @import("value.zig");
 const Obj = @import("gc.zig").GC.Obj;
 const Error = Obj.Error;
 const OP = @import("op.zig").OP;
+const Compiler = @import("vm.zig").VM.Compiler;
 const print = std.debug.print;
 
 pub fn disassembleChunk(ch: *const Obj.Chunk) Error!void {
@@ -73,7 +74,7 @@ fn _disassembleInstruction(ch: *const Obj.Chunk, offset: usize, print_fn: bool) 
         @intFromEnum(OP.SET_INDEX) => simpleInstruction(name, offset),
         @intFromEnum(OP.GET_INDEX) => simpleInstruction(name, offset),
         @intFromEnum(OP.CALL) => try byteInstruction(name, ch, offset),
-        @intFromEnum(OP.CLOSURE) => try byteInstruction(name, ch, offset),
+        @intFromEnum(OP.CLOSURE) => try closureInstruction(name, ch, offset),
         @intFromEnum(OP.CLOSE_UPVALUE) => simpleInstruction(name, offset),
         else => blk: {
             print("Unknown opcode {d} {s}\n", .{ op, name });
@@ -91,9 +92,13 @@ fn constantInstruction(name: []const u8, ch: *const Obj.Chunk, offset: usize, pr
     const constant = try ch.code.ptr().get(offset + 1);
     const constval = try ch.constants.ptr().get(constant);
     print("{s:<32} {d:4} '{f}'\n", .{ name, constant, constval });
-    if (print_fn) if (constval.cast_if(Obj.Type.Function)) |function| {
-        try disassembleChunk(function.chunk.ptr());
-    };
+    if (print_fn) {
+        if (constval.cast_if(Obj.Type.Function)) |function| {
+            try disassembleChunk(function.chunk.ptr());
+        } else if (constval.cast_if(Obj.Type.Chunk)) |chunk| {
+            try disassembleChunk(chunk);
+        }
+    }
     return offset + 2;
 }
 
@@ -111,21 +116,20 @@ fn jumpInstruction(name: []const u8, sign: bool, ch: *const Obj.Chunk, offset: u
     return offset + 3;
 }
 
-fn closureInstruction(name: []const u8, ch: *const Obj.Chunk, offset: usize, print_fn: bool) Error!usize {
+fn closureInstruction(name: []const u8, ch: *const Obj.Chunk, offset: usize) Error!usize {
     var off = offset + 1;
-    const constant = try ch.code.ptr().get(off);
-    const val = try ch.constants.ptr().get(constant);
-    const function = try val.obj.cast(.Function);
-    print("{s:<32} {d:4} '{f}'\n", .{ name, constant, function });
-    for (0..function.upvalue_count) |_| {
-        const isLocal = try ch.code.ptr().get(off + 1);
-        const idx = try ch.code.ptr().get(off + 2);
+    const arity = try ch.code.ptr().get(off);
+    const count = try ch.code.ptr().get(off + 1);
+    off += 2;
+
+    print("{s:<32} {d:4} {d}\n", .{ name, arity, count });
+    for (0..count) |_| {
+        const tp = try ch.code.ptr().get(off);
+        const idx = try ch.code.ptr().get(off + 1);
         try print_offset(ch, off + 1);
-        print("{s:<38}|-> {s} {d}\n", .{ "", if (isLocal == 1) "local" else "upvalue", idx });
+        print("{s:<38}|-> {s} {d}\n", .{ "", @tagName(@as(Compiler.Upvalue.Type, @enumFromInt(tp))), idx });
         off += 2;
     }
-    if (print_fn)
-        try disassembleChunk(function.chunk.ptr());
 
     return off + 1;
 }

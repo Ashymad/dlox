@@ -12,7 +12,7 @@ pub fn Upvalue(fields: anytype) type {
     return packed struct {
         const Self = @This();
 
-        pub const Arg = struct { val: *Value, slot: u8 };
+        pub const Arg = struct { val: *Value, slot: u8, closed: bool = false };
         pub const Error = error{OutOfMemory};
 
         obj: Super,
@@ -24,8 +24,11 @@ pub fn Upvalue(fields: anytype) type {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
-                .location = Packed(*Value).init(arg.val),
-                .closed = false,
+                .location = if (arg.closed)
+                    try Packed(*Value).create2(allocator, arg.val.*)
+                else
+                    Packed(*Value).init(arg.val),
+                .closed = arg.closed,
                 .slot = arg.slot,
             };
             return self;

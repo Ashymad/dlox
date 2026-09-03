@@ -55,13 +55,26 @@ pub fn Compiler(size: comptime_int) type {
         enclosing: ?*Self,
         upvalues: [upvalues_size]Upvalue,
         upvaluesCount: u8,
+        currentClass: ?*Class,
+
+        const Class = struct {
+            enclosing: ?*Class,
+        };
 
         const Self = @This();
+        pub const Stack = size;
 
         pub const Upvalue = struct {
+            pub const Type = enum(u8) {
+                local = 0,
+                remote = 1,
+                empty = 2,
+            };
+
             index: u8,
-            isLocal: bool,
+            type: Type,
         };
+
         const upvalues_size = std.math.maxInt(u8);
 
         const Local = struct {
@@ -115,9 +128,10 @@ pub fn Compiler(size: comptime_int) type {
                     T.NIL           => R(S.literal,  null,      P.NONE ),
                     T.OR            => R(null,       S._or,     P.OR ),
                     T.TRUE          => R(S.literal,  null,      P.NONE ),
-                    T.FUN           => R(S.function, null,      P.NONE ),
+                    T.FUN           => R(S.funExpression, null,      P.NONE ),
                     T.CLASS         => R(S.class,    null,      P.NONE ),
                     T.DOT           => R(null,       S.dot,     P.CALL ),
+                    T.THIS          => R(S.this,     null,      P.NONE ),
                     else            => R(null,       null,      P.NONE ),
                     // zig fmt: on
                 };
@@ -362,6 +376,14 @@ pub fn Compiler(size: comptime_int) type {
             }
         }
 
+        fn this(self: *Self, _: bool) void {
+            if (self.currentClass) |_| {
+                self.variable(false);
+            } else {
+                self.errorAtPrevious("Can't use 'this' outside of class.");
+            }
+        }
+
         fn variable(self: *Self, canAssign: bool) void {
             self.namedVariable(self.previous, canAssign);
         }
@@ -390,20 +412,22 @@ pub fn Compiler(size: comptime_int) type {
             if (self.enclosing) |enclosing| {
                 if (enclosing.resolveLocal(name)) |local| {
                     enclosing.locals[local].captured = true;
-                    return self.addUpvalue(local, true) catch null;
+                    return self.addUpvalue(local, .local) catch null;
                 } else if (enclosing.resolveUpvalue(name)) |upvalue| {
-                    return self.addUpvalue(upvalue, false) catch null;
+                    return self.addUpvalue(upvalue, .remote) catch null;
                 }
             }
             return null;
         }
 
-        fn addUpvalue(self: *Self, idx: u8, isLocal: bool) !u8 {
+        fn addUpvalue(self: *Self, idx: u8, tp: Upvalue.Type) !u8 {
             const count = self.upvaluesCount;
 
-            for (self.upvalues[0..count], 0..) |upvalue, i| {
-                if (upvalue.index == idx and upvalue.isLocal == isLocal) {
-                    return @intCast(i);
+            if (tp != .empty) {
+                for (self.upvalues[0..count], 0..) |upvalue, i| {
+                    if (upvalue.index == idx and upvalue.type == tp) {
+                        return @intCast(i);
+                    }
                 }
             }
 
@@ -413,7 +437,7 @@ pub fn Compiler(size: comptime_int) type {
                 return self.lastError;
             }
 
-            self.upvalues[count] = .{ .index = idx, .isLocal = isLocal };
+            self.upvalues[count] = .{ .index = idx, .type = tp };
             self.upvaluesCount += 1;
             return count;
         }
@@ -554,16 +578,21 @@ pub fn Compiler(size: comptime_int) type {
             };
             self.emit(OP.CONSTANT, self.makeConstant(Value.init(cls)));
             self.consume(Token.LEFT_BRACE, "Expect '{' before class body");
+
+            var curcls = Class{ .enclosing = self.currentClass };
+            self.currentClass = &curcls;
             while (!self.check(Token.RIGHT_BRACE) and !self.check(Token.EOF)) {
                 self.method();
             }
+            self.currentClass = self.currentClass.?.enclosing;
+
             self.consume(Token.RIGHT_BRACE, "Expect '}' after class body");
         }
 
         fn method(self: *Self) void {
             self.consume(Token.IDENTIFIER, "Expect method name");
             const constant = self.identifierConstant(self.previous) catch return;
-            self.function(false);
+            self.function(true);
             self.emit(OP.METHOD, constant);
         }
 
@@ -574,7 +603,11 @@ pub fn Compiler(size: comptime_int) type {
             self.defineVariable(global, true);
         }
 
-        fn function(self: *Self, _: bool) void {
+        fn funExpression(self: *Self, _: bool) void {
+            self.function(false);
+        }
+
+        fn function(self: *Self, isMethod: bool) void {
             const chunk = self.objects.emplace(.Chunk, {}) catch |err| {
                 self.errorAtPrevious("Couldn't allocate chunk");
                 self.lastError = err;
@@ -605,6 +638,18 @@ pub fn Compiler(size: comptime_int) type {
                 }
             }
             compiler.consume(Token.RIGHT_PAREN, "Expect ')' after parameters");
+
+            if (isMethod) {
+                _ = compiler.addUpvalue(0, .empty) catch return;
+                compiler.locals[0] = .{
+                    .name = scanner.Token{ .type = Token.THIS, .lexeme = "this", .line = -1, .column = 0 },
+                    .depth = compiler.scopeDepth,
+                };
+                compiler.emit(OP.GET_UPVALUE, 0);
+                compiler.emit(OP.SET_LOCAL, 0);
+                compiler.emitOP(OP.POP);
+            }
+
             compiler.consume(Token.LEFT_BRACE, "Expect '{' before function body");
 
             compiler.block();
@@ -614,22 +659,25 @@ pub fn Compiler(size: comptime_int) type {
             if (compiler.hadError) {
                 self.lastError = compiler.lastError;
             } else {
-                const fun = self.objects.emplace(.Function, .{
-                    .type = .Function,
-                    .chunk = compiler.end() catch return,
-                    .arity = arity,
-                }) catch |err| {
-                    self.errorAtPrevious("Couldn't allocate function");
-                    self.lastError = err;
-                    return;
-                };
-                self.emit(OP.CONSTANT, self.makeConstant(Value.init(fun.cast())));
+                const endchunk = compiler.end() catch return;
+                if (compiler.upvaluesCount == 0) {
+                    const fun = self.objects.emplace(.Function, .{
+                        .type = .Function,
+                        .chunk = endchunk,
+                        .arity = arity,
+                    }) catch |err| {
+                        self.errorAtPrevious("Couldn't allocate function");
+                        self.lastError = err;
+                        return;
+                    };
+                    self.emit(OP.CONSTANT, self.makeConstant(Value.init(fun.cast())));
+                } else {
+                    self.emit(OP.CONSTANT, self.makeConstant(Value.init(endchunk.cast())));
+                    self.emit(OP.CLOSURE, arity);
 
-                if (compiler.upvaluesCount != 0) {
-                    self.emit(OP.CLOSURE, compiler.upvaluesCount);
-
+                    self.emitByte(compiler.upvaluesCount);
                     for (compiler.upvalues[0..compiler.upvaluesCount]) |upvalue| {
-                        self.emitByte(if (upvalue.isLocal) 1 else 0);
+                        self.emitByte(@intFromEnum(upvalue.type));
                         self.emitByte(upvalue.index);
                     }
                 }
@@ -1026,8 +1074,9 @@ pub fn Compiler(size: comptime_int) type {
                 .localCount = 1,
                 .scopeDepth = 0,
                 .enclosing = null,
-                .upvalues = @splat(Upvalue{ .index = 0, .isLocal = false }),
+                .upvalues = @splat(Upvalue{ .index = 0, .type = .empty }),
                 .upvaluesCount = 0,
+                .currentClass = null,
             };
             self.locals[0].depth = 0;
 
@@ -1038,6 +1087,7 @@ pub fn Compiler(size: comptime_int) type {
             var enclosed = try Self.init(enclosing.scanner, enclosing.objects, chunk);
             enclosed.current = enclosing.current;
             enclosed.enclosing = enclosing;
+            enclosed.currentClass = enclosing.currentClass;
             enclosed.beginScope();
 
             return enclosed;

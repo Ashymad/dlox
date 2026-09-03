@@ -101,7 +101,7 @@ pub const GC = struct {
                 if (obj.upvalues.ptr()) |upvalues|
                     for (upvalues) |upvalue_ptr|
                         if (upvalue_ptr) |upvalue|
-                            self.mark("c", upvalue);
+                            self.mark("f", upvalue);
             },
             *Obj.Chunk => {
                 for (obj.constants.ptr().slice()) |constant|

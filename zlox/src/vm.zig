@@ -22,6 +22,10 @@ pub const VM = struct {
     globals: Globals,
     allocator: std.mem.Allocator,
 
+    pub const CALLSTACK = 64;
+    pub const STACK = 256;
+    pub const Compiler = compiler.Compiler(STACK);
+
     pub const Global = struct {
         val: Value,
         con: bool,
@@ -110,17 +114,14 @@ pub const VM = struct {
     }
 
     pub fn interpret(self: *@This(), source: []const u8, dbg: bool) InterpreterError!void {
-        const callstack_size = 64;
-        const stack_size = 256;
-
         try self.objects.push_callback(&VM.gc_callback, self);
         defer self.objects.pop_callback();
 
-        const chunk = try compiler.Compiler(stack_size).compile(source, &self.objects);
+        const chunk = try Compiler.compile(source, &self.objects);
 
         if (dbg) try debug.disassembleChunk(chunk);
 
-        try Interpreter(callstack_size, stack_size).run(self, chunk, dbg);
+        try Interpreter(CALLSTACK, Compiler.Stack).run(self, chunk, dbg);
     }
 
     fn Interpreter(callstack_size: comptime_int, stack_size: comptime_int) type {
@@ -133,7 +134,7 @@ pub const VM = struct {
             stackTop: [*]Value,
             stack: [stack_size]Value,
             vm: *VM,
-            open_upvalues: List,
+            upvalues: List,
 
             pub fn run(vm: *VM, chunk: *Obj.Chunk, dbg: bool) InterpreterError!void {
                 var self = @This(){
@@ -142,14 +143,14 @@ pub const VM = struct {
                     .stack = @splat(Value.init({})),
                     .stackTop = undefined,
                     .vm = vm,
-                    .open_upvalues = List.init(vm.allocator),
+                    .upvalues = List.init(vm.allocator),
                 };
                 self.stackTop = &self.stack;
 
                 try vm.objects.push_callback(&Self.gc_callback, &self);
                 defer vm.objects.pop_callback();
 
-                defer self.open_upvalues.free();
+                defer self.upvalues.free();
 
                 self.push(Value.init(chunk.cast()));
 
@@ -174,7 +175,7 @@ pub const VM = struct {
                     self.vm.objects.mark("F", self.frames[frame_idx].callee);
                 }
 
-                var iter = self.open_upvalues.iter();
+                var iter = self.upvalues.iter();
                 while (iter.next()) |upval| {
                     self.vm.objects.mark("U", upval);
                 }
@@ -279,7 +280,7 @@ pub const VM = struct {
             }
 
             fn captureUpvalue(self: *@This(), slot: u8) !*Obj.Upvalue {
-                var iter = self.open_upvalues.iter();
+                var iter = self.upvalues.iter();
 
                 while (iter.next()) |val| {
                     if (val.slot == slot)
@@ -295,7 +296,7 @@ pub const VM = struct {
             }
 
             fn closeUpvalues(self: *@This(), slot: u8) !void {
-                var iter = self.open_upvalues.iter();
+                var iter = self.upvalues.iter();
 
                 while (iter.next()) |upval| {
                     if (upval.slot < slot) break;
@@ -392,11 +393,25 @@ pub const VM = struct {
                             self.frame().slots[self.read_byte()] = self.peek(0);
                         },
                         @intFromEnum(OP.GET_PROPERTY) => {
-                            if (self.peek(0).cast_if(Obj.Type.Instance)) |instance| {
+                            var val = self.peek(0);
+                            if (val.cast_if(Obj.Type.Instance)) |instance| {
                                 const field = self.read_string();
-                                const prop = instance.fields.ptr().get(field) catch {
-                                    self.runtimeError("Undefined property '{f}'", .{field});
-                                    return InterpreterError.RuntimeError;
+                                const prop = instance.fields.ptr().get(field) catch blk: {
+                                    const method = instance.cls.ptr().methods.ptr().get(field) catch {
+                                        self.runtimeError("Undefined property '{f}'", .{field});
+                                        return InterpreterError.RuntimeError;
+                                    };
+                                    if (method.upvalues.ptr()) |upvalues| {
+                                        if (upvalues[0] == null) {
+                                            upvalues[0] = try self.vm.objects.emplace(.Upvalue, .{
+                                                .val = &val,
+                                                .slot = 0,
+                                                .closed = true,
+                                            });
+                                            method.type = .Method;
+                                        }
+                                    }
+                                    break :blk Value.init(method.cast());
                                 };
                                 _ = self.pop();
                                 self.push(prop);
@@ -438,12 +453,12 @@ pub const VM = struct {
                         @intFromEnum(OP.GET_UPVALUE) => {
                             const closure = self.frame().callee;
                             const index = self.read_byte();
-                            self.push(closure.upvalues.at(index).?.location.ptr().*);
+                            self.push(closure.upvalues.at(index).?.location.get());
                         },
                         @intFromEnum(OP.SET_UPVALUE) => {
                             const closure = self.frame().callee;
                             const index = self.read_byte();
-                            closure.upvalues.at(index).?.location.ptr().* = self.peek(0);
+                            closure.upvalues.at(index).?.location.set(self.peek(0));
                         },
                         @intFromEnum(OP.CLOSE_UPVALUE) => {
                             try self.closeUpvalues(self.current_slot());
@@ -500,24 +515,29 @@ pub const VM = struct {
                             try self.callValue(self.peek(argCount), argCount);
                         },
                         @intFromEnum(OP.CLOSURE) => {
+                            const arity = self.read_byte();
                             const count = self.read_byte();
-                            const function = try self.pop().obj.cast(.Function);
+                            const chunk = try self.pop().obj.cast(.Chunk);
+
                             const closure = try self.vm.objects.emplace(.Function, .{
                                 .type = .Closure,
-                                .chunk = function.chunk.ptr(),
-                                .arity = function.arity,
+                                .chunk = chunk,
+                                .arity = arity,
                                 .upvalues = count,
                             });
+
                             self.push(Value.init(closure.cast()));
 
                             for (closure.upvalues.ptr().?) |*upvalue| {
-                                const isLocal = self.read_byte();
+                                const tp = self.read_byte();
                                 const slot = self.read_byte();
-                                if (isLocal == 1) {
-                                    upvalue.* = try self.captureUpvalue(slot);
-                                } else {
-                                    upvalue.* = self.frame().callee.upvalues.at(slot);
-                                }
+                                const U = Compiler.Upvalue.Type;
+                                upvalue.* = switch (tp) {
+                                    @intFromEnum(U.local) => try self.captureUpvalue(slot),
+                                    @intFromEnum(U.remote) => self.frame().callee.upvalues.at(slot),
+                                    @intFromEnum(U.empty) => null,
+                                    else => return InterpreterError.RuntimeError,
+                                };
                             }
                         },
                         @intFromEnum(OP.METHOD) => {
