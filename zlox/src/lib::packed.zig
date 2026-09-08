@@ -2,163 +2,186 @@ const std = @import("std");
 
 const utils = @import("lib::utils.zig");
 
-pub fn Packed(Type: type) type {
+const Error = error{NullPointer};
+
+pub fn Pointer(Type: type) type {
     return packed struct {
-        const optional = utils.is_type(Type, "optional");
-
-        const Ptr = if (optional) @typeInfo(Type).optional.child else Type;
-
-        const Child = if (utils.is_type(Ptr, "pointer"))
-            @typeInfo(Ptr).pointer.child
-        else
-            @compileError("Expected pointer type, got " ++ @typeName(Ptr));
-
-        const slice = @typeInfo(Ptr).pointer.size == .slice;
-        const many = @typeInfo(Ptr).pointer.size == .many;
-
         const Self = @This();
 
+        pub const optional = utils.is_type(Type, "optional");
+
+        pub const Ptr = if (optional) @typeInfo(Type).optional.child else Type;
+        pub const Val = @typeInfo(Ptr).pointer.child;
+        pub const Opt = if (optional) ?Val else Val;
+
         _ptr: usize,
-        _len: if (slice) usize else void,
 
         pub fn create(allocator: std.mem.Allocator) !Self {
-            return if (slice or many)
-                @compileError("Cannot create() a slice or many pointer, use alloc() instead")
-            else
-                Self.init(try allocator.create(Child));
-        }
-
-        pub fn create2(allocator: std.mem.Allocator, val: Child) !Self {
-            const self = try Self.create(allocator);
-            self.set(val);
-            return self;
-        }
-
-        pub fn alloc(allocator: std.mem.Allocator, count: usize) !Self {
-            return if (count == 0 and optional)
-                Self.init(null)
-            else if (count == 0)
-                @panic("Unable to create a non-optional 0 size pointer")
-            else if (slice)
-                Self.init(try allocator.alloc(Child, count))
-            else if (many)
-                Self.init((try allocator.alloc(Child, count)).ptr)
-            else if (count == 1)
-                Self.create(allocator)
-            else
-                @panic("Cannot alloc() a single-item pointer with a count of more than one");
-        }
-
-        pub fn alloc2(allocator: std.mem.Allocator, count: usize, val: Child) !Self {
-            const self = try Self.alloc(allocator, count);
-            var p = if (optional)
-                if (self.ptr()) |p|
-                    p
-                else
-                    return self
-            else
-                self.ptr();
-
-            for (0..count) |i| {
-                p[i] = val;
-            }
-            return self;
+            return Self.init(try allocator.create(Val));
         }
 
         pub fn init(arg: Type) Self {
             return Self{
-                ._ptr = if (optional)
-                    if (arg) |val|
-                        @intFromPtr(if (slice) val.ptr else val)
-                    else
-                        0
+                ._ptr = if (utils.optional(arg)) |val|
+                    @intFromPtr(val)
                 else
-                    @intFromPtr(if (slice) arg.ptr else arg),
-
-                ._len = if (slice)
-                    if (optional)
-                        if (arg) |val|
-                            val.len
-                        else
-                            0
-                    else
-                        arg.len,
+                    0,
             };
         }
 
         pub fn ptr(self: Self) Type {
             return if (optional and self._ptr == 0)
                 null
-            else if (slice)
-                @as(utils.with_size(Ptr, .many), @ptrFromInt(self._ptr))[0..self._len]
             else
                 @ptrFromInt(self._ptr);
         }
 
-        pub fn get(self: Self) if (optional) ?Child else Child {
-            return if (slice or many)
-                @compileError("Cannot call get() on a slice or many pointer")
-            else if (optional and self._ptr == 0)
+        pub fn get(self: Self) Opt {
+            return if (utils.optional(self.ptr())) |pointer|
+                pointer.*
+            else if (optional)
                 null
             else
-                @as(Ptr, @ptrFromInt(self._ptr)).*;
+                unreachable;
         }
 
-        pub fn at(self: Self, idx: usize) if (optional and !utils.is_type(Child, "optional")) ?Child else Child {
-            return if (!slice and !many)
-                @compileError("Cannot call at() on a single-item pointer")
+        pub fn set(self: Self, val: Val) if (optional) Error.NullPointer!void else void {
+            if (utils.optional(self.ptr())) |pointer|
+                pointer.* = val
             else if (optional)
-                if (self.ptr()) |val|
-                    val[idx]
-                else
-                    null
+                return Error.NullPointer
             else
-                self.ptr()[idx];
-        }
-
-        pub fn len(self: Self) usize {
-            return if (slice)
-                self._len
-            else
-                @compileError("Cannot call len() on a non-slice pointer");
-        }
-
-        pub fn free(self: Self, allocator: std.mem.Allocator, count: usize) void {
-            const pointer = if (optional)
-                if (self.ptr()) |_ptr|
-                    _ptr
-                else
-                    return
-            else
-                self.ptr();
-
-            if (many) {
-                allocator.free(pointer[0..count]);
-            } else if (slice) {
-                if (count != self._len)
-                    @panic("Count has to be equal to the length of the slice");
-
-                allocator.free(pointer);
-            } else {
-                if (count != 1)
-                    @panic("Count has to be equal 1 for a single-item pointer");
-
-                allocator.destroy(pointer);
-            }
-        }
-
-        pub fn set(self: Self, val: if (many or slice) utils.mod_ptr_t(ptr, "const", true) else Child) void {
-            if (many or slice)
-                @memcpy(self.ptr(), val)
-            else
-                self.ptr().* = val;
+                unreachable;
         }
 
         pub fn destroy(self: Self, allocator: std.mem.Allocator) void {
-            if (many)
-                @compileError("Cannot use destroy() on a many-pointer, call free() instead");
-
-            self.free(allocator, if (slice) self._len else 1);
+            if (utils.optional(self.ptr())) |pointer|
+                allocator.destroy(pointer);
         }
     };
+}
+
+pub fn Object(Type: type) type {
+    return packed struct {
+        const Self = @This();
+
+        const Ptr = Pointer(Type);
+
+        _ptr: Ptr,
+        _own: bool,
+
+        pub fn create(allocator: std.mem.Allocator) !Self {
+            var self = Self.init(try allocator.create(Ptr.Val));
+            if (utils.fn_error(Ptr.Val.init)) |_|
+                self._ptr.set(try Ptr.Val.init(allocator))
+            else
+                self._ptr.set(Ptr.Val.init(allocator));
+
+            self._own = true;
+            return self;
+        }
+
+        pub fn init(arg: Type) Self {
+            return Self{
+                ._ptr = Ptr.init(arg),
+                ._own = false,
+            };
+        }
+
+        pub fn own(self: Self) bool {
+            return self._own;
+        }
+
+        pub fn ptr(self: Self) Type {
+            return self._ptr.ptr();
+        }
+
+        pub fn get(self: Self) Ptr.Opt {
+            return self._ptr.get();
+        }
+
+        pub fn set(self: Self, val: Ptr.Val) if (Ptr.optional) Error.NullPointer!void else void {
+            self._ptr.set(val);
+        }
+
+        pub fn destroy(self: Self, allocator: std.mem.Allocator) void {
+            if (self._own)
+                self._ptr.ptr().deinit();
+            self._ptr.destroy(allocator);
+        }
+    };
+}
+
+pub fn Slice(Type: type) type {
+    return packed struct {
+        const Self = @This();
+        const Ptr = Pointer(utils.with_size(Type, .many));
+
+        _ptr: Ptr,
+        _len: usize,
+
+        pub fn create(allocator: std.mem.Allocator, count: usize) !Self {
+            return Self.init(try allocator.alloc(Ptr.Val, count));
+        }
+
+        pub fn init(arg: Type) Self {
+            return Self{
+                ._ptr = Ptr.init(arg.ptr),
+                ._len = if (utils.optional(arg)) |val|
+                    val.len
+                else
+                    0,
+            };
+        }
+
+        pub fn ptr(self: Self) Type {
+            return if (utils.optional(self._ptr.ptr())) |pointer|
+                pointer[0..self._len]
+            else if (Ptr.optional)
+                null
+            else
+                unreachable;
+        }
+
+        pub fn get(self: Self, idx: usize) Ptr.Opt {
+            return if (utils.optional(self.ptr())) |pointer|
+                pointer[idx]
+            else
+                null;
+        }
+
+        pub fn len(self: Self) usize {
+            return self._len;
+        }
+
+        pub fn set(self: Self, val: Ptr.Val) if (Ptr.optional) Error.NullPointer!void else void {
+            if (utils.optional(self.ptr())) |pointer|
+                @memcpy(pointer, val)
+            else if (Ptr.optional)
+                return Error.NullPointer
+            else
+                unreachable;
+        }
+
+        pub fn destroy(self: Self, allocator: std.mem.Allocator) void {
+            if (utils.optional(self.ptr())) |pointer|
+                allocator.free(pointer);
+        }
+    };
+}
+
+pub fn Packed(Type: type) type {
+    const Ptr = if (utils.is_type(Type, "optional")) @typeInfo(Type).optional.child else Type;
+    const Child = @typeInfo(Ptr).pointer.child;
+
+    return if (@typeInfo(Ptr).pointer.size == .slice)
+        Slice(Type)
+    else if ((utils.is_type(Child, "union") or
+        utils.is_type(Child, "enum") or
+        utils.is_type(Child, "struct")) and
+        @hasDecl(Child, "init") and
+        @hasDecl(Child, "deinit"))
+        Object(Type)
+    else
+        Pointer(Type);
 }

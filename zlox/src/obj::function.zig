@@ -29,10 +29,10 @@ pub fn Function(fields: anytype) type {
         arity: u8,
         chunk: Packed(*Super.Chunk),
         type: Type,
-        upvalues: Packed(?[]Upvalue),
+        upvalues: Packed([]Upvalue),
 
         pub fn init(arg: Arg, allocator: std.mem.Allocator) Error!*Self {
-            if (if (arg.type == .Closure) arg.upvalues == 0 else arg.upvalues > 0)
+            if (if (arg.type == .Closure or arg.type == .Method) arg.upvalues == 0 else arg.upvalues > 0)
                 return Error.InvalidArguments;
 
             const self: *Self = try allocator.create(Self);
@@ -41,8 +41,10 @@ pub fn Function(fields: anytype) type {
                 .chunk = Packed(Chunk).init(arg.chunk),
                 .arity = arg.arity,
                 .type = arg.type,
-                .upvalues = try Packed(?[]Upvalue).alloc2(allocator, arg.upvalues, null),
+                .upvalues = try Packed([]Upvalue).create(allocator, arg.upvalues),
             };
+
+            for (self.upvalues.ptr()) |*upvalue| upvalue.* = null;
             return self;
         }
 

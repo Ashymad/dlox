@@ -7,6 +7,7 @@ const hash = @import("hash.zig");
 const Packed = @import("lib::packed.zig").Packed;
 const Value = @import("value.zig").Value;
 const Obj = @import("obj.zig").Obj;
+const GC = @import("gc.zig").GC;
 
 pub fn Instance(fields: anytype) type {
     const Super = Obj(fields);
@@ -28,9 +29,32 @@ pub fn Instance(fields: anytype) type {
             self.* = Self{
                 .obj = Super.make(Self),
                 .cls = Packed(*Super.Class).init(cls),
-                .fields = try Packed(*Self.Fields).create2(allocator, Fields.init(allocator)),
+                .fields = try Packed(*Self.Fields).create(allocator),
             };
             return self;
+        }
+
+        pub fn method(self: *Self, gc: *GC, name: *Super.String) !*Super.Function {
+            const met = try self.cls.ptr().methods.ptr().get(name);
+            const fun = try gc.emplace(.Function, .{
+                .type = .Method,
+                .chunk = met.chunk.ptr(),
+                .arity = met.arity,
+                .upvalues = @intCast(met.upvalues.len() + 1),
+            });
+
+            var val = Value.init(self.cast());
+            const len = fun.upvalues.len();
+            if (len > 1)
+                @memcpy(fun.upvalues.ptr()[0 .. len - 2], met.upvalues.ptr());
+
+            fun.upvalues.ptr()[len - 1] = try gc.emplace(.Upvalue, .{
+                .val = &val,
+                .slot = 0,
+                .closed = true,
+            });
+
+            return fun;
         }
 
         pub fn cast(self: anytype) utils.copy_const(@TypeOf(self), *Super) {
@@ -46,7 +70,6 @@ pub fn Instance(fields: anytype) type {
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {
-            self.fields.ptr().deinit();
             self.fields.destroy(allocator);
             allocator.destroy(self);
         }

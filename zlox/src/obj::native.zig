@@ -19,20 +19,16 @@ pub fn Native(fields: anytype) type {
         pub const ArityMin = 0;
         pub const ArityMax = std.math.maxInt(u8);
 
-        pub const Type = enum(u8) { Builtin, Literal };
-
         pub const Arg = struct {
             fun: Fn,
             arity_min: u8 = ArityMin,
             arity_max: u8 = ArityMax,
-            type: Type = .Builtin,
         };
 
         obj: Super,
         fun: Packed(Fn),
         arity_min: u8,
         arity_max: u8,
-        type: Type,
 
         pub fn init(arg: Arg, allocator: std.mem.Allocator) Error!*Self {
             const self: *Self = try allocator.create(Self);
@@ -41,7 +37,6 @@ pub fn Native(fields: anytype) type {
                 .fun = Packed(Fn).init(arg.fun),
                 .arity_min = arg.arity_min,
                 .arity_max = arg.arity_max,
-                .type = arg.type,
             };
             return self;
         }
@@ -55,11 +50,8 @@ pub fn Native(fields: anytype) type {
             return @ptrCast(self);
         }
 
-        pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
-            switch (self.type) {
-                .Builtin => _ = try writer.write("<Builtin>"),
-                .Literal => _ = try writer.write("<Literal> "),
-            }
+        pub fn format(_: *const Self, writer: *std.Io.Writer) !void {
+            _ = try writer.write("<Builtin>");
         }
 
         pub fn eql(_: *const Self, _: *const Self) bool {

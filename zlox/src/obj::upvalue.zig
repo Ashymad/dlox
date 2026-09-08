@@ -25,20 +25,21 @@ pub fn Upvalue(fields: anytype) type {
             self.* = Self{
                 .obj = Super.make(Self),
                 .location = if (arg.closed)
-                    try Packed(*Value).create2(allocator, arg.val.*)
+                    try Packed(*Value).create(allocator)
                 else
                     Packed(*Value).init(arg.val),
                 .closed = arg.closed,
                 .slot = arg.slot,
             };
+            if (arg.closed) self.location.set(arg.val.*);
             return self;
         }
 
         pub fn close(self: *Self, allocator: std.mem.Allocator) Error!void {
             if (!self.closed) {
                 const old = self.location.get();
-                self.location = try Packed(*Value).create2(allocator, old);
-                self.closed = true;
+                self.location = try Packed(*Value).create(allocator);
+                self.location.set(old);
             }
         }
 
@@ -47,7 +48,12 @@ pub fn Upvalue(fields: anytype) type {
         }
 
         pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
-            try writer.print("<Upvalue{{{f} at 0x{x}, {any}, {d}}}>", .{ self.location.get(), self.location._ptr, self.closed, self.slot });
+            try writer.print("<Upvalue{{{f} at 0x{x}, {any}, {d}}}>", .{
+                self.location.get(),
+                self.location._ptr,
+                self.closed,
+                self.slot,
+            });
         }
 
         pub fn eql(_: *const Self, _: *const Self) bool {
@@ -55,8 +61,7 @@ pub fn Upvalue(fields: anytype) type {
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {
-            if (self.closed)
-                self.location.destroy(allocator);
+            self.location.destroy(allocator);
             allocator.destroy(self);
         }
     };

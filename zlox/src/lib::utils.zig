@@ -12,8 +12,24 @@ pub fn copy_const(T: type, U: type) type {
     return mod_ptr_t(U, "const", is_const(T));
 }
 
+pub fn optional(val: anytype) if (is_type(@TypeOf(val), "optional")) @TypeOf(val) else ?@TypeOf(val) {
+    return val;
+}
+
+pub fn log_return(val: anytype) @TypeOf(val) {
+    if (@TypeOf(val) == type)
+        @compileLog("Returning: " ++ @typeName(val))
+    else
+        @compileLog("Returning: " ++ @typeName(@TypeOf(val)));
+    return val;
+}
+
 pub fn mod_ptr_t(T: type, comptime field: []const u8, comptime val: anytype) type {
-    comptime var new = @typeInfo(T).pointer;
+    const is_optional = is_type(T, "optional");
+
+    const old = if (is_optional) @typeInfo(T).optional.child else T;
+
+    comptime var new = @typeInfo(old).pointer;
 
     if (@hasField(std.lang.Type.Pointer.Attributes, field)) {
         @field(new.attrs, field) = val;
@@ -21,12 +37,14 @@ pub fn mod_ptr_t(T: type, comptime field: []const u8, comptime val: anytype) typ
         @field(new, field) = val;
     }
 
-    return @Pointer(
+    const ret = @Pointer(
         new.size,
         new.attrs,
         new.child,
         std.lang.Type.Pointer.sentinel(new),
     );
+
+    return if (is_optional) ?ret else ret;
 }
 
 pub fn enum_len(T: type) usize {

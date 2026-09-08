@@ -1,0 +1,16 @@
+class P {
+    prin() {
+        print this.msg;
+    }
+}
+
+var A = P();
+A.msg = "I am A";
+
+con prin = A.prin;
+
+var B = P();
+B.msg = "I am B";
+
+B.prin();
+prin();

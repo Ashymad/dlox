@@ -24,7 +24,7 @@ pub fn Table(fields: anytype) type {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
-                .table = try Packed(*Self.Table).create2(allocator, Self.Table.init(allocator)),
+                .table = try Packed(*Self.Table).create(allocator),
             };
             return self;
         }
@@ -75,7 +75,6 @@ pub fn Table(fields: anytype) type {
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {
-            self.table.ptr().deinit();
             self.table.destroy(allocator);
             allocator.destroy(self);
         }

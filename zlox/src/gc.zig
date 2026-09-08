@@ -98,10 +98,9 @@ pub const GC = struct {
             },
             *Obj.Function => {
                 self.mark("f", obj.chunk.ptr());
-                if (obj.upvalues.ptr()) |upvalues|
-                    for (upvalues) |upvalue_ptr|
-                        if (upvalue_ptr) |upvalue|
-                            self.mark("f", upvalue);
+                for (obj.upvalues.ptr()) |upvalue_ptr|
+                    if (upvalue_ptr) |upvalue|
+                        self.mark("f", upvalue);
             },
             *Obj.Chunk => {
                 for (obj.constants.ptr().slice()) |constant|
@@ -249,14 +248,14 @@ pub const GC = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.callbacks.free();
-        self.greys.free();
+        self.callbacks.deinit();
+        self.greys.deinit();
         while (true) {
             const el = self.objs.pop(0) catch break;
             dbg_obj("O", "free", el, false);
             el.free(self.allocator);
         }
-        self.objs.free();
+        self.objs.deinit();
         self.pool.free();
     }
 };

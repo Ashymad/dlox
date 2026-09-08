@@ -9,7 +9,6 @@ const value = @import("value.zig");
 const Token = scanner.TokenType;
 const OP = @import("op.zig").OP;
 const Value = value.Value;
-const ValueArray = value.ValueArray;
 const GC = @import("gc.zig").GC;
 const Obj = GC.Obj;
 const Chunk = Obj.Chunk;
@@ -65,11 +64,7 @@ pub fn Compiler(size: comptime_int) type {
         pub const Stack = size;
 
         pub const Upvalue = struct {
-            pub const Type = enum(u8) {
-                local = 0,
-                remote = 1,
-                empty = 2,
-            };
+            pub const Type = enum(u8) { local = 0, remote = 1 };
 
             index: u8,
             type: Type,
@@ -354,12 +349,10 @@ pub fn Compiler(size: comptime_int) type {
             if (isList) {
                 self.chunk.code.ptr().set(offset, self.makeObj(.Native, .{
                     .fun = vm_native.list,
-                    .type = .Literal,
                 }) catch return) catch return;
             } else {
                 self.chunk.code.ptr().set(offset, self.makeObj(.Native, .{
                     .fun = vm_native.table,
-                    .type = .Literal,
                 }) catch return) catch return;
             }
             self.emit(OP.CALL, argCount);
@@ -423,11 +416,9 @@ pub fn Compiler(size: comptime_int) type {
         fn addUpvalue(self: *Self, idx: u8, tp: Upvalue.Type) !u8 {
             const count = self.upvaluesCount;
 
-            if (tp != .empty) {
-                for (self.upvalues[0..count], 0..) |upvalue, i| {
-                    if (upvalue.index == idx and upvalue.type == tp) {
-                        return @intCast(i);
-                    }
+            for (self.upvalues[0..count], 0..) |upvalue, i| {
+                if (upvalue.index == idx and upvalue.type == tp) {
+                    return @intCast(i);
                 }
             }
 
@@ -639,13 +630,15 @@ pub fn Compiler(size: comptime_int) type {
             }
             compiler.consume(Token.RIGHT_PAREN, "Expect ')' after parameters");
 
+            var offset: usize = 0;
+
             if (isMethod) {
-                _ = compiler.addUpvalue(0, .empty) catch return;
                 compiler.locals[0] = .{
                     .name = scanner.Token{ .type = Token.THIS, .lexeme = "this", .line = -1, .column = 0 },
                     .depth = compiler.scopeDepth,
                 };
                 compiler.emit(OP.GET_UPVALUE, 0);
+                offset = compiler.chunk.code.ptr().len - 1;
                 compiler.emit(OP.SET_LOCAL, 0);
                 compiler.emitOP(OP.POP);
             }
@@ -653,6 +646,9 @@ pub fn Compiler(size: comptime_int) type {
             compiler.consume(Token.LEFT_BRACE, "Expect '{' before function body");
 
             compiler.block();
+
+            if (isMethod)
+                compiler.chunk.code.ptr().set(offset, compiler.upvaluesCount) catch unreachable;
 
             self.current = compiler.current;
 
@@ -672,9 +668,9 @@ pub fn Compiler(size: comptime_int) type {
                     };
                     self.emit(OP.CONSTANT, self.makeConstant(Value.init(fun.cast())));
                 } else {
-                    self.emit(OP.CONSTANT, self.makeConstant(Value.init(endchunk.cast())));
-                    self.emit(OP.CLOSURE, arity);
+                    self.emit(OP.CLOSURE, self.makeConstant(Value.init(endchunk.cast())));
 
+                    self.emitByte(arity);
                     self.emitByte(compiler.upvaluesCount);
                     for (compiler.upvalues[0..compiler.upvaluesCount]) |upvalue| {
                         self.emitByte(@intFromEnum(upvalue.type));
@@ -832,7 +828,6 @@ pub fn Compiler(size: comptime_int) type {
 
             self.emitObj(.Native, Obj.Native.Arg{
                 .fun = vm_native.table,
-                .type = .Literal,
             }) catch return;
 
             var jumpOver = self.emitJump(OP.JUMP);
@@ -1074,7 +1069,7 @@ pub fn Compiler(size: comptime_int) type {
                 .localCount = 1,
                 .scopeDepth = 0,
                 .enclosing = null,
-                .upvalues = @splat(Upvalue{ .index = 0, .type = .empty }),
+                .upvalues = @splat(Upvalue{ .index = 0, .type = .local }),
                 .upvaluesCount = 0,
                 .currentClass = null,
             };

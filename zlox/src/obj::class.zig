@@ -26,7 +26,7 @@ pub fn Class(fields: anytype) type {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
-                .methods = try Packed(*Methods).create2(allocator, Methods.init(allocator)),
+                .methods = try Packed(*Methods).create(allocator),
             };
             return self;
         }
@@ -44,7 +44,6 @@ pub fn Class(fields: anytype) type {
         }
 
         pub fn free(self: *const Self, allocator: std.mem.Allocator) void {
-            self.methods.ptr().deinit();
             self.methods.destroy(allocator);
             allocator.destroy(self);
         }

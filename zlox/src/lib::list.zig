@@ -142,7 +142,7 @@ pub fn List(T: type) type {
             return true;
         }
 
-        pub fn free(self: *Self) void {
+        pub fn deinit(self: *Self) void {
             while (true) {
                 _ = self.pop(-1) catch break;
             }

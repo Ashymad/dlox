@@ -21,8 +21,8 @@ pub fn disassembleChunk(ch: *const Obj.Chunk) Error!void {
 
 pub fn print_offset(ch: *const Obj.Chunk, offset: usize) !void {
     print("{d:0>4} ", .{offset});
-    const line = try ch.lines.ptr().get(offset);
-    if (offset > 0 and line == (try ch.lines.ptr().get(offset - 1))) {
+    const line = ch.lines.ptr().get(offset).?;
+    if (offset > 0 and line == ch.lines.ptr().get(offset - 1).?) {
         print("   | ", .{});
     } else {
         print("{d:4} ", .{line});
@@ -36,7 +36,7 @@ pub fn disassembleInstruction(ch: *const Obj.Chunk, offset: usize) Error!usize {
 fn _disassembleInstruction(ch: *const Obj.Chunk, offset: usize, print_fn: bool) Error!usize {
     try print_offset(ch, offset);
 
-    const op = try ch.code.ptr().get(offset);
+    const op = ch.code.ptr().get(offset).?;
     const name = @tagName(@as(OP, @enumFromInt(op)));
 
     return switch (op) {
@@ -89,8 +89,8 @@ fn simpleInstruction(name: []const u8, offset: usize) usize {
 }
 
 fn constantInstruction(name: []const u8, ch: *const Obj.Chunk, offset: usize, print_fn: bool) Error!usize {
-    const constant = try ch.code.ptr().get(offset + 1);
-    const constval = try ch.constants.ptr().get(constant);
+    const constant = ch.code.ptr().get(offset + 1).?;
+    const constval = ch.constants.ptr().get(constant).?;
     print("{s:<32} {d:4} '{f}'\n", .{ name, constant, constval });
     if (print_fn) {
         if (constval.cast_if(Obj.Type.Function)) |function| {
@@ -103,13 +103,13 @@ fn constantInstruction(name: []const u8, ch: *const Obj.Chunk, offset: usize, pr
 }
 
 fn byteInstruction(name: []const u8, ch: *const Obj.Chunk, offset: usize) Error!usize {
-    print("{s:<32} {d:4}\n", .{ name, try ch.code.ptr().get(offset + 1) });
+    print("{s:<32} {d:4}\n", .{ name, ch.code.ptr().get(offset + 1).? });
     return offset + 2;
 }
 
 fn jumpInstruction(name: []const u8, sign: bool, ch: *const Obj.Chunk, offset: usize) !usize {
-    const msb: u16 = try ch.code.ptr().get(offset + 1);
-    const lsb: u16 = try ch.code.ptr().get(offset + 2);
+    const msb: u16 = ch.code.ptr().get(offset + 1).?;
+    const lsb: u16 = ch.code.ptr().get(offset + 2).?;
     const jump = (msb << 8) | lsb;
 
     print("{s:<32} {d:4} -> {d}\n", .{ name, offset, if (sign) offset + 3 + jump else offset + 3 - jump });
@@ -118,18 +118,24 @@ fn jumpInstruction(name: []const u8, sign: bool, ch: *const Obj.Chunk, offset: u
 
 fn closureInstruction(name: []const u8, ch: *const Obj.Chunk, offset: usize) Error!usize {
     var off = offset + 1;
-    const arity = try ch.code.ptr().get(off);
-    const count = try ch.code.ptr().get(off + 1);
-    off += 2;
+    const constant = ch.code.ptr().get(off).?;
+    const arity = ch.code.ptr().get(off + 1).?;
+    const count = ch.code.ptr().get(off + 2).?;
+    off += 3;
+
+    const constval = ch.constants.ptr().get(constant).?;
+    const chunk = try constval.obj.cast(.Chunk);
 
     print("{s:<32} {d:4} {d}\n", .{ name, arity, count });
     for (0..count) |_| {
-        const tp = try ch.code.ptr().get(off);
-        const idx = try ch.code.ptr().get(off + 1);
+        const tp = ch.code.ptr().get(off).?;
+        const idx = ch.code.ptr().get(off + 1).?;
         try print_offset(ch, off + 1);
         print("{s:<38}|-> {s} {d}\n", .{ "", @tagName(@as(Compiler.Upvalue.Type, @enumFromInt(tp))), idx });
         off += 2;
     }
+
+    try disassembleChunk(chunk);
 
     return off + 1;
 }

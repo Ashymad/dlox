@@ -21,6 +21,7 @@ pub const VM = struct {
     objects: GC,
     globals: Globals,
     allocator: std.mem.Allocator,
+    initializer: *Obj.String,
 
     pub const CALLSTACK = 64;
     pub const STACK = 256;
@@ -98,7 +99,12 @@ pub const VM = struct {
             .globals = Globals.init(allocator),
             .objects = try GC.init(allocator, io),
             .allocator = allocator,
+            .initializer = undefined,
         };
+
+        self.initializer = try self.objects.emplace(.String, &.{"init"});
+
+        GC.exclude(self.initializer.cast());
 
         try self.defineNative("clock", 0, 0, native.Clock.clock);
         try self.defineNative("put", 1, 1, native.put);
@@ -150,7 +156,7 @@ pub const VM = struct {
                 try vm.objects.push_callback(&Self.gc_callback, &self);
                 defer vm.objects.pop_callback();
 
-                defer self.upvalues.free();
+                defer self.upvalues.deinit();
 
                 self.push(Value.init(chunk.cast()));
 
@@ -210,7 +216,7 @@ pub const VM = struct {
             }
 
             fn read_constant(self: *@This()) Value {
-                return self.frame().chunk.constants.ptr().get(self.read_byte()) catch unreachable;
+                return self.frame().chunk.constants.ptr().get(self.read_byte()).?;
             }
 
             fn read_string(self: *@This()) *Obj.String {
@@ -249,12 +255,18 @@ pub const VM = struct {
             }
 
             fn callClass(self: *@This(), callee: *Obj.Class, argCount: u8) !void {
-                if (argCount != 0) {
-                    self.runtimeError("Expected {d} arguments but got {d}", .{ 0, argCount });
-                    return InterpreterError.RuntimeError;
-                }
+                const instance = try self.vm.objects.emplace(.Instance, callee);
 
-                self.pook(argCount, Value.init(try self.vm.objects.emplace_cast(.Instance, callee)));
+                const initializer = instance.method(&self.vm.objects, self.vm.initializer) catch
+                    if (argCount != 0) {
+                        self.runtimeError("Expected 0 arguments but got {d}", .{argCount});
+                        return InterpreterError.RuntimeError;
+                    } else {
+                        self.pook(argCount, Value.init(instance.cast()));
+                        return;
+                    };
+
+                try self.callFunction(initializer, argCount);
             }
 
             fn callFunction(self: *@This(), callee: *Obj.Function, argCount: u8) !void {
@@ -396,23 +408,11 @@ pub const VM = struct {
                             var val = self.peek(0);
                             if (val.cast_if(Obj.Type.Instance)) |instance| {
                                 const field = self.read_string();
-                                const prop = instance.fields.ptr().get(field) catch blk: {
-                                    const method = instance.cls.ptr().methods.ptr().get(field) catch {
+                                const prop = instance.fields.ptr().get(field) catch
+                                    Value.init((instance.method(&self.vm.objects, field) catch {
                                         self.runtimeError("Undefined property '{f}'", .{field});
                                         return InterpreterError.RuntimeError;
-                                    };
-                                    if (method.upvalues.ptr()) |upvalues| {
-                                        if (upvalues[0] == null) {
-                                            upvalues[0] = try self.vm.objects.emplace(.Upvalue, .{
-                                                .val = &val,
-                                                .slot = 0,
-                                                .closed = true,
-                                            });
-                                            method.type = .Method;
-                                        }
-                                    }
-                                    break :blk Value.init(method.cast());
-                                };
+                                    }).cast());
                                 _ = self.pop();
                                 self.push(prop);
                             } else {
@@ -453,12 +453,12 @@ pub const VM = struct {
                         @intFromEnum(OP.GET_UPVALUE) => {
                             const closure = self.frame().callee;
                             const index = self.read_byte();
-                            self.push(closure.upvalues.at(index).?.location.get());
+                            self.push(closure.upvalues.get(index).?.location.get());
                         },
                         @intFromEnum(OP.SET_UPVALUE) => {
                             const closure = self.frame().callee;
                             const index = self.read_byte();
-                            closure.upvalues.at(index).?.location.set(self.peek(0));
+                            closure.upvalues.get(index).?.location.set(self.peek(0));
                         },
                         @intFromEnum(OP.CLOSE_UPVALUE) => {
                             try self.closeUpvalues(self.current_slot());
@@ -515,9 +515,9 @@ pub const VM = struct {
                             try self.callValue(self.peek(argCount), argCount);
                         },
                         @intFromEnum(OP.CLOSURE) => {
+                            const chunk = try self.read_constant().obj.cast(.Chunk);
                             const arity = self.read_byte();
                             const count = self.read_byte();
-                            const chunk = try self.pop().obj.cast(.Chunk);
 
                             const closure = try self.vm.objects.emplace(.Function, .{
                                 .type = .Closure,
@@ -528,14 +528,13 @@ pub const VM = struct {
 
                             self.push(Value.init(closure.cast()));
 
-                            for (closure.upvalues.ptr().?) |*upvalue| {
+                            for (closure.upvalues.ptr()) |*upvalue| {
                                 const tp = self.read_byte();
                                 const slot = self.read_byte();
                                 const U = Compiler.Upvalue.Type;
                                 upvalue.* = switch (tp) {
                                     @intFromEnum(U.local) => try self.captureUpvalue(slot),
-                                    @intFromEnum(U.remote) => self.frame().callee.upvalues.at(slot),
-                                    @intFromEnum(U.empty) => null,
+                                    @intFromEnum(U.remote) => self.frame().callee.upvalues.get(slot),
                                     else => return InterpreterError.RuntimeError,
                                 };
                             }
@@ -568,7 +567,7 @@ pub const VM = struct {
                 while (true) : (i -= 1) {
                     const fram = self.frames[i];
                     const idx = @intFromPtr(fram.ip) - @intFromPtr(fram.chunk.code.ptr().data.ptr);
-                    std.debug.print("[line {d}] in {f}\n", .{ fram.chunk.lines.ptr().get(idx) catch 1, fram.callee });
+                    std.debug.print("[line {d}] in {f}\n", .{ fram.chunk.lines.ptr().get(idx) orelse 1, fram.callee });
                     if (i == 0) break;
                 }
                 std.debug.print(fmt ++ "\n", args);

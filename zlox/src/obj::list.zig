@@ -24,7 +24,7 @@ pub fn List(fields: anytype) type {
             const self: *Self = try allocator.create(Self);
             self.* = Self{
                 .obj = Super.make(Self),
-                .list = try Packed(*Self.List).create2(allocator, Self.List.init(allocator)),
+                .list = try Packed(*Self.List).create(allocator),
             };
             return self;
         }
@@ -52,7 +52,6 @@ pub fn List(fields: anytype) type {
         }
 
         pub fn free(self: *Self, allocator: std.mem.Allocator) void {
-            self.list.ptr().free();
             self.list.destroy(allocator);
             allocator.destroy(self);
         }
