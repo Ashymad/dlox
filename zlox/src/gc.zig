@@ -124,6 +124,12 @@ pub const GC = struct {
                         s.mark("i", val);
                     }
                 }.fun);
+                obj.bound.ptr().for_each(self, struct {
+                    pub fn fun(s: *Self, key: Obj.Class.Methods.Key, val: Obj.Class.Methods.Value) void {
+                        s.mark("i", key);
+                        s.mark("i", val);
+                    }
+                }.fun);
             },
             *Obj.Class => {
                 obj.methods.ptr().for_each(self, struct {
