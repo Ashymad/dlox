@@ -53,12 +53,12 @@ pub fn Function(fields: anytype) type {
         }
 
         pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
-            switch (self.type) {
-                .Function => _ = try writer.write("<Function>"),
-                .Script => _ = try writer.write("<Script>"),
-                .Closure => _ = try writer.write("<Closure>"),
-                .Method => _ = try writer.write("<Method>"),
-            }
+            _ = try writer.write(switch (self.type) {
+                .Function => "<Function>",
+                .Script => "<Script>",
+                .Closure => "<Closure>",
+                .Method => "<Method>",
+            });
         }
 
         pub fn eql(_: *const Self, _: *const Self) bool {

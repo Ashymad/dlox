@@ -47,6 +47,7 @@ pub fn Compiler(size: comptime_int) type {
         hadError: bool,
         panicMode: bool,
         chunk: *Obj.Chunk,
+        initializer: bool,
         objects: *GC,
         locals: [size]Local,
         localCount: usize,
@@ -183,7 +184,9 @@ pub fn Compiler(size: comptime_int) type {
         }
 
         fn emitReturn(self: *Self) void {
-            if (self.enclosing) |_|
+            if (self.initializer)
+                self.emit(OP.GET_LOCAL, 0)
+            else if (self.enclosing) |_|
                 self.emitOP(OP.NIL);
 
             self.emitOP(OP.RETURN);
@@ -583,22 +586,22 @@ pub fn Compiler(size: comptime_int) type {
         fn method(self: *Self) void {
             self.consume(Token.IDENTIFIER, "Expect method name");
             const constant = self.identifierConstant(self.previous) catch return;
-            self.function(true);
+            self.function(true, self.previous.lexeme);
             self.emit(OP.METHOD, constant);
         }
 
         fn funDeclaration(self: *Self) void {
             const global = self.parseVariable("Expect function name.", true) catch return;
             self.markInitialized();
-            self.function(false);
+            self.function(false, self.previous.lexeme);
             self.defineVariable(global, true);
         }
 
         fn funExpression(self: *Self, _: bool) void {
-            self.function(false);
+            self.function(false, "<anon>");
         }
 
-        fn function(self: *Self, isMethod: bool) void {
+        fn function(self: *Self, isMethod: bool, name: []const u8) void {
             const chunk = self.objects.emplace(.Chunk, {}) catch |err| {
                 self.errorAtPrevious("Couldn't allocate chunk");
                 self.lastError = err;
@@ -610,6 +613,8 @@ pub fn Compiler(size: comptime_int) type {
                 self.lastError = err;
                 return;
             };
+
+            compiler.initializer = isMethod and std.mem.eql(u8, name, "init");
 
             compiler.objects.push_callback(&gc_callback, &compiler) catch @panic("Couln't push callback");
             defer compiler.objects.pop_callback();
@@ -813,6 +818,8 @@ pub fn Compiler(size: comptime_int) type {
             }
             if (self.match(Token.SEMICOLON)) {
                 self.emitReturn();
+            } else if (self.initializer) {
+                self.errorAtCurrent("Can't return a value from an initializer");
             } else {
                 self.expression();
                 self.consume(Token.SEMICOLON, "Expect ';' after return value");
@@ -1072,6 +1079,7 @@ pub fn Compiler(size: comptime_int) type {
                 .upvalues = @splat(Upvalue{ .index = 0, .type = .local }),
                 .upvaluesCount = 0,
                 .currentClass = null,
+                .initializer = false,
             };
             self.locals[0].depth = 0;
 

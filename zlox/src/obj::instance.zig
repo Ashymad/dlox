@@ -46,7 +46,7 @@ pub fn Instance(fields: anytype) type {
             var val = Value.init(self.cast());
             const len = fun.upvalues.len();
             if (len > 1)
-                @memcpy(fun.upvalues.ptr()[0 .. len - 2], met.upvalues.ptr());
+                @memcpy(fun.upvalues.ptr()[0 .. len - 1], met.upvalues.ptr());
 
             fun.upvalues.ptr()[len - 1] = try gc.emplace(.Upvalue, .{
                 .val = &val,

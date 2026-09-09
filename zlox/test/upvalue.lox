@@ -1,0 +1,17 @@
+fun Test(inc) {
+    var upval = 0;
+    return class {
+        init() {
+            this.inc = inc;
+        }
+        method() {
+            print(upval);
+            upval = upval + inc;
+        }
+    };
+}
+
+con test = Test(3)();
+
+test.method();
+test.method();
